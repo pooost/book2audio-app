@@ -1,0 +1,51 @@
+"""Runs the conversion pipeline on a background thread.
+
+The Qt UI thread must never block on the pipeline (a book is thousands of
+GPU-bound TTS calls). This is the only place the GUI touches
+book2audio.pipeline -- everything else talks to this worker via signals.
+"""
+
+import threading
+
+from PySide6.QtCore import QThread, Signal
+
+from book2audio.pipeline.convert import (
+    ChunkSynthesisError,
+    ConversionCancelled,
+    ConversionRequest,
+    ProgressEvent,
+    run_conversion,
+)
+
+
+class ConversionWorker(QThread):
+    progress = Signal(object)  # ProgressEvent
+    finished_ok = Signal(str)  # output path
+    failed = Signal(str, object)  # message, ChunkFailure | None
+    cancelled = Signal()
+
+    def __init__(self, request: ConversionRequest, parent=None):
+        super().__init__(parent)
+        self.request = request
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
+    def run(self) -> None:
+        try:
+            output = run_conversion(
+                self.request,
+                on_progress=lambda e: self.progress.emit(e),
+                should_cancel=self._cancel_event.is_set,
+            )
+            self.finished_ok.emit(str(output))
+        except ConversionCancelled:
+            self.cancelled.emit()
+        except ChunkSynthesisError as e:
+            self.failed.emit(str(e), e.failure)
+        except Exception as e:  # noqa: BLE001 -- surface anything to the UI, never crash silently
+            self.failed.emit(f"{type(e).__name__}: {e}", None)
+
+
+__all__ = ["ConversionWorker", "ProgressEvent"]

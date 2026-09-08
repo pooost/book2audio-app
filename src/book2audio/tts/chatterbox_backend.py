@@ -26,6 +26,12 @@ def is_model_cached() -> bool:
     return True
 
 
+def supported_languages() -> dict[str, str]:
+    from chatterbox import SUPPORTED_LANGUAGES
+
+    return dict(SUPPORTED_LANGUAGES)
+
+
 def download_model() -> None:
     """Explicit, user-requested download -- bypasses offline-first behavior."""
     from huggingface_hub import constants as hf_constants
