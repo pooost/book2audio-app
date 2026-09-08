@@ -9,20 +9,35 @@ import hashlib
 import os
 from pathlib import Path
 
-import torch
-import torchaudio
+from book2audio.core.device import pick_device
 
-DEFAULT_VOICE_LANGUAGE = "en"
+ENGINE_NAME = "Chatterbox Multilingual V3"
+REPO_ID = "ResembleAI/chatterbox"
+REQUIRED_FILES = ["ve.pt", "t3_mtl23ls_v3.safetensors", "s3gen.pt", "conds.pt"]
 
 
-def pick_device(requested: str = "auto") -> str:
-    if requested != "auto":
-        return requested
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+def is_model_cached() -> bool:
+    from huggingface_hub import _CACHED_NO_EXIST, try_to_load_from_cache
+
+    for filename in REQUIRED_FILES:
+        result = try_to_load_from_cache(repo_id=REPO_ID, filename=filename)
+        if result is None or result is _CACHED_NO_EXIST:
+            return False
+    return True
+
+
+def download_model() -> None:
+    """Explicit, user-requested download -- bypasses offline-first behavior."""
+    from huggingface_hub import constants as hf_constants
+
+    previous = hf_constants.HF_HUB_OFFLINE
+    hf_constants.HF_HUB_OFFLINE = False
+    try:
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
+        ChatterboxMultilingualTTS.from_pretrained(device="cpu", t3_model="v3")
+    finally:
+        hf_constants.HF_HUB_OFFLINE = previous
 
 
 class Narrator:
@@ -43,13 +58,13 @@ class Narrator:
 
         try:
             return model_cls.from_pretrained(device=self.device, t3_model="v3")
-        except LocalEntryNotFoundError:
-            print("Model cache incomplete -- downloading missing files (one-time)...")
-            hf_constants.HF_HUB_OFFLINE = False
-            try:
-                return model_cls.from_pretrained(device=self.device, t3_model="v3")
-            finally:
-                hf_constants.HF_HUB_OFFLINE = True
+        except LocalEntryNotFoundError as e:
+            if not hf_constants.HF_HUB_OFFLINE:
+                raise
+            raise ModelMissingError(
+                "Chatterbox model files aren't fully cached locally, and offline mode "
+                "is on. Run `book2audio setup-models` to download them explicitly."
+            ) from e
 
     @property
     def sample_rate(self) -> int:
@@ -71,7 +86,14 @@ class Narrator:
         # torchaudio.save isn't atomic -- write to a sibling temp file and
         # rename, so a killed/crashed run never leaves a partial .wav that a
         # resumed run would mistake for a finished, cached chunk.
-        tmp_path = out_path.with_suffix(".wav.tmp")
+        import torchaudio
+
+        # The temp file's own extension must be .wav: torchaudio's soundfile
+        # backend derives format purely from splitting the path on "." and
+        # taking the last part (`format=` is only honored for file-like
+        # objects, not string paths) -- a ".tmp" suffix fails with
+        # "Unsupported format: tmp" no matter what `format=` is passed.
+        tmp_path = out_path.with_name(out_path.stem + ".tmp.wav")
         torchaudio.save(str(tmp_path), audio, self.sample_rate)
         os.replace(tmp_path, out_path)
         return out_path
@@ -83,3 +105,7 @@ class Narrator:
         h.update((self.audio_prompt_path or "").encode("utf-8"))
         h.update(b"v3")
         return h.hexdigest()[:24]
+
+
+class ModelMissingError(Exception):
+    pass
