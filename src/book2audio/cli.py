@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from book2audio.ingest.extract import ExtractionError
+from book2audio.ingest.page_select import PageRangeError
+from book2audio.processing.ai_review import AiReviewError
 from book2audio.pipeline.convert import (
     ChunkSynthesisError,
     ConversionCancelled,
@@ -44,6 +46,9 @@ def convert(
     preserve_chapters: bool = typer.Option(True, "--preserve-chapters/--no-preserve-chapters", help="Detect chapter headings, or treat the whole book as one chapter."),
     allow_download: bool = typer.Option(False, "--allow-download/--no-allow-download", help="Allow downloading a missing model during conversion (default: off -- run `book2audio setup-models` instead)."),
     bitrate: str = typer.Option("64k", "--bitrate", help="AAC bitrate for the output .m4b."),
+    pages: Optional[str] = typer.Option(None, "--pages", help='PDF only. e.g. "1-10,15,20-25" (1-indexed, inclusive). Omit for the whole document.'),
+    ai_review: bool = typer.Option(False, "--ai-review/--no-ai-review", help="Run extracted text through a local Ollama model to fix OCR errors before narration. Off by default; requires Ollama running locally."),
+    ai_review_model: str = typer.Option("llama3.2", "--ai-review-model", help="Ollama model name to use for --ai-review."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize."),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
@@ -64,12 +69,20 @@ def convert(
         preserve_chapters=preserve_chapters,
         allow_download=allow_download,
         bitrate=bitrate,
+        page_range=pages,
+        ai_review=ai_review,
+        ai_review_model=ai_review_model,
     )
 
     console.print(f"[bold]Extracting[/bold] {input_path} ...")
+
+    def on_plan_progress(event: ProgressEvent) -> None:
+        if event.stage == "ai_review":
+            console.print(f"[bold]AI review[/bold] chapter {event.chapter_index}/{event.chapter_total}: {event.message}")
+
     try:
-        plan, _chapter_chunks = plan_conversion(request)
-    except (ValueError, ExtractionError) as e:
+        plan, chapter_chunks = plan_conversion(request, on_progress=on_plan_progress)
+    except (ValueError, ExtractionError, PageRangeError, AiReviewError) as e:
         raise typer.BadParameter(str(e)) from e
 
     console.print(f"[bold]{len(plan.chapter_titles)}[/bold] chapter(s), [bold]{plan.total_chunks}[/bold] chunk(s), [bold]{plan.total_chars:,}[/bold] characters.")
@@ -102,7 +115,7 @@ def convert(
                 console.print("[bold]Muxing[/bold] chapters into .m4b ...")
 
         try:
-            run_conversion(request, on_progress=on_progress)
+            run_conversion(request, chapter_chunks=chapter_chunks, on_progress=on_progress)
         except ChunkSynthesisError as e:
             console.print(f"[red]Failed:[/red] {e}")
             console.print(f"[yellow]Chapter {e.failure.chapter_index} ({e.failure.chapter_title!r}), "

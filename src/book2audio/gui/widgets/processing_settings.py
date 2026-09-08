@@ -1,4 +1,4 @@
-"""PROCESSING: OCR mode, chapter detection, offline mode.
+"""PROCESSING: OCR mode, chapter detection, offline mode, optional AI review.
 
 Deliberately does NOT include footnote/table/figure-caption toggles: the
 backend has no such controls (footnote-marker stripping in
@@ -7,7 +7,7 @@ all) -- exposing switches for either would be a GUI setting that does
 nothing, which the spec for this app explicitly rules out.
 """
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLineEdit, QWidget
 
 
 class ProcessingSettingsWidget(QWidget):
@@ -30,6 +30,18 @@ class ProcessingSettingsWidget(QWidget):
         self.offline_check.setChecked(True)
         layout.addRow("", self.offline_check)
 
+        self.ai_review_check = QCheckBox("AI review: fix OCR errors with a local model before narrating")
+        self.ai_review_check.setChecked(False)
+        self.ai_review_check.toggled.connect(self._on_ai_review_toggled)
+        layout.addRow("", self.ai_review_check)
+
+        self.ai_review_model_edit = QLineEdit("llama3.2")
+        self.ai_review_model_edit.setEnabled(False)
+        layout.addRow("Ollama model:", self.ai_review_model_edit)
+
+    def _on_ai_review_toggled(self, checked: bool) -> None:
+        self.ai_review_model_edit.setEnabled(checked)
+
     def ocr_mode(self) -> str:
         return self.ocr_mode_combo.currentData()
 
@@ -38,3 +50,9 @@ class ProcessingSettingsWidget(QWidget):
 
     def allow_download(self) -> bool:
         return not self.offline_check.isChecked()
+
+    def ai_review(self) -> bool:
+        return self.ai_review_check.isChecked()
+
+    def ai_review_model(self) -> str:
+        return self.ai_review_model_edit.text().strip() or "llama3.2"

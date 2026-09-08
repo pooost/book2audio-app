@@ -48,8 +48,14 @@ class DoctorDialog(QDialog):
         self.table.setRowCount(len(report.checks))
         for row, check in enumerate(report.checks):
             name_item = QTableWidgetItem(check.name)
-            result_item = QTableWidgetItem(("OK -- " if check.ok else "MISSING -- ") + check.detail)
-            result_item.setForeground(_green() if check.ok else _red())
+            if check.ok:
+                prefix, color = "OK -- ", _green()
+            elif check.optional:
+                prefix, color = "OPTIONAL -- ", _neutral()
+            else:
+                prefix, color = "MISSING -- ", _red()
+            result_item = QTableWidgetItem(prefix + check.detail)
+            result_item.setForeground(color)
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, result_item)
         self.table.resizeColumnsToContents()
@@ -57,7 +63,7 @@ class DoctorDialog(QDialog):
         if report.all_ok:
             self.summary_label.setText("All checks passed.")
         else:
-            missing = [c.name for c in report.checks if not c.ok]
+            missing = [c.name for c in report.checks if not c.ok and not c.optional]
             self.summary_label.setText(
                 "Missing: " + ", ".join(missing) + ". Run `book2audio setup-models` in a terminal if a model is missing."
             )
@@ -73,3 +79,9 @@ def _red():
     from PySide6.QtGui import QColor
 
     return QColor("#c62828")
+
+
+def _neutral():
+    from PySide6.QtGui import QColor
+
+    return QColor("#9e9e9e")

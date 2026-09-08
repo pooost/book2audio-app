@@ -17,6 +17,7 @@ class CheckResult:
     name: str
     ok: bool
     detail: str
+    optional: bool = False  # excluded from all_ok -- e.g. a feature that's off by default
 
 
 @dataclass
@@ -25,7 +26,7 @@ class DoctorReport:
 
     @property
     def all_ok(self) -> bool:
-        return all(c.ok for c in self.checks)
+        return all(c.ok for c in self.checks if not c.optional)
 
 
 def run_doctor() -> DoctorReport:
@@ -43,6 +44,7 @@ def run_doctor() -> DoctorReport:
     checks.append(_device_check())
     checks += _chatterbox_checks()
     checks += _openocr_checks()
+    checks.append(_ollama_check())
 
     offline = os.environ.get("HF_HUB_OFFLINE", "0") not in ("0", "", "false", "False")
     checks.append(CheckResult("Offline mode", offline, "on (default)" if offline else "off"))
@@ -102,3 +104,14 @@ def _openocr_checks() -> list[CheckResult]:
     detail = f"cached at {openocr_cache_dir()}" if cached else "not cached -- run `book2audio setup-models`"
     checks.append(CheckResult("OpenOCR models", cached, detail))
     return checks
+
+
+def _ollama_check() -> CheckResult:
+    from book2audio.processing.ai_review import is_ollama_available, available_models
+
+    available = is_ollama_available()
+    if not available:
+        return CheckResult("Ollama (optional, for --ai-review)", False, "not running -- only needed if you use --ai-review", optional=True)
+    models = available_models()
+    detail = f"running, models: {', '.join(models)}" if models else "running, but no models pulled yet (`ollama pull llama3.2`)"
+    return CheckResult("Ollama (optional, for --ai-review)", bool(models), detail, optional=True)

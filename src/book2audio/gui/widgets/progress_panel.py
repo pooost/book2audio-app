@@ -10,6 +10,7 @@ STAGE_LABELS = {
     "ocr": "Running OCR",
     "cleaning": "Cleaning text",
     "chapter_detection": "Detecting chapters",
+    "ai_review": "AI review (local model)",
     "tts": "Narrating",
     "assembling": "Assembling .m4b",
     "finished": "Finished",

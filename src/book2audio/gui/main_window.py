@@ -93,6 +93,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No book selected", "Select or drop a book first.")
             return None
 
+        page_range = self.book_input.page_range()
+        if page_range and input_path.suffix.lower() == ".pdf":
+            from book2audio.ingest.page_select import PageRangeError, get_page_count, parse_page_range
+
+            try:
+                parse_page_range(page_range, get_page_count(input_path))
+            except PageRangeError as e:
+                QMessageBox.warning(self, "Invalid page range", str(e))
+                return None
+
+        if self.processing_settings.ai_review():
+            from book2audio.processing.ai_review import is_ollama_available
+
+            if not is_ollama_available():
+                QMessageBox.warning(
+                    self, "Ollama not reachable",
+                    "AI review is on, but no local Ollama server was found at "
+                    "http://localhost:11434.\n\nInstall Ollama and run "
+                    "`ollama pull llama3.2`, or turn AI review off.",
+                )
+                return None
+
         output_path = self.output_settings.output_path(input_path)
 
         return ConversionRequest(
@@ -109,6 +131,9 @@ class MainWindow(QMainWindow):
             preserve_chapters=self.processing_settings.preserve_chapters(),
             allow_download=self.processing_settings.allow_download(),
             bitrate=self.advanced_panel.bitrate(),
+            page_range=page_range,
+            ai_review=self.processing_settings.ai_review(),
+            ai_review_model=self.processing_settings.ai_review_model(),
         )
 
     def _start_conversion(self) -> None:

@@ -27,6 +27,9 @@ class ConversionRequest:
     preserve_chapters: bool = True
     allow_download: bool = False
     bitrate: str = "64k"
+    page_range: str | None = None  # e.g. "1-10,15,20-25" (1-indexed, inclusive); PDF only
+    ai_review: bool = False  # off by default -- see processing/ai_review.py
+    ai_review_model: str = "llama3.2"
 
     def resolved_cache_dir(self) -> Path:
         return self.cache_dir or self.output_path.with_name(self.output_path.stem + "_cache")
@@ -37,7 +40,7 @@ class ConversionRequest:
 
 @dataclass
 class ProgressEvent:
-    stage: str  # extracting | ocr | cleaning | chapter_detection | tts | assembling | finished
+    stage: str  # extracting | ocr | cleaning | chapter_detection | ai_review | tts | assembling | finished
     message: str = ""
     chapter_index: int = 0
     chapter_total: int = 0
@@ -77,16 +80,40 @@ class ConversionPlan:
     total_chars: int = 0
 
 
-def plan_conversion(request: ConversionRequest) -> tuple[ConversionPlan, list[tuple[str, list[str]]]]:
-    """Run extraction/cleaning/chunking without touching the GPU. Returns the
-    plan summary plus the actual (title, chunks) pairs so a caller that wants
-    to proceed doesn't have to redo this work."""
+def _summarize(chapter_chunks: list[tuple[str, list[str]]]) -> ConversionPlan:
+    return ConversionPlan(
+        chapter_titles=[t for t, _c in chapter_chunks],
+        chunks_per_chapter=[len(c) for _t, c in chapter_chunks],
+        total_chunks=sum(len(c) for _t, c in chapter_chunks),
+        total_chars=sum(len(c) for _t, chunks in chapter_chunks for c in chunks),
+    )
+
+
+def plan_conversion(
+    request: ConversionRequest,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+) -> tuple[ConversionPlan, list[tuple[str, list[str]]]]:
+    """Run page-selection/extraction/cleaning/AI-review/chunking without
+    touching the GPU. Returns the plan summary plus the actual (title,
+    chunks) pairs so a caller that wants to proceed doesn't have to redo
+    this work (see run_conversion's chapter_chunks parameter)."""
     from book2audio.ingest.extract import extract_markdown
     from book2audio.processing.chunker import chunk_text
-    from book2audio.processing.clean import clean_text, split_chapters
+    from book2audio.processing.clean import Chapter, clean_text, split_chapters
+
+    report = on_progress or (lambda _e: None)
+
+    effective_input = request.input_path
+    if request.page_range and request.input_path.suffix.lower() == ".pdf":
+        from book2audio.ingest.page_select import extract_page_subset
+
+        report(ProgressEvent(stage="extracting", message=f"Selecting pages {request.page_range}..."))
+        subset_path = request.resolved_cache_dir() / "pages_subset.pdf"
+        extract_page_subset(request.input_path, request.page_range, subset_path)
+        effective_input = subset_path
 
     raw = extract_markdown(
-        request.input_path,
+        effective_input,
         ocr_output_dir=request.resolved_cache_dir() / "ocr",
         ocr_mode=request.ocr_mode,
         allow_download=request.allow_download,
@@ -99,34 +126,45 @@ def plan_conversion(request: ConversionRequest) -> tuple[ConversionPlan, list[tu
     if request.preserve_chapters:
         chapters = split_chapters(cleaned)
     else:
-        from book2audio.processing.clean import Chapter
-
         chapters = [Chapter(title=request.resolved_title(), text=cleaned)]
 
-    chapter_chunks = [(ch.title, chunk_text(ch.text, max_chars=request.max_chars)) for ch in chapters]
+    if request.ai_review:
+        from book2audio.processing.ai_review import review_text
 
-    plan = ConversionPlan(
-        chapter_titles=[t for t, _ in chapter_chunks],
-        chunks_per_chapter=[len(c) for _t, c in chapter_chunks],
-        total_chunks=sum(len(c) for _t, c in chapter_chunks),
-        total_chars=sum(len(c) for _t, chunks in chapter_chunks for c in chunks),
-    )
-    return plan, chapter_chunks
+        reviewed = []
+        for i, ch in enumerate(chapters, start=1):
+            report(ProgressEvent(
+                stage="ai_review", chapter_index=i, chapter_total=len(chapters), message=ch.title,
+            ))
+            reviewed.append(Chapter(title=ch.title, text=review_text(ch.text, model=request.ai_review_model)))
+        chapters = reviewed
+
+    chapter_chunks = [(ch.title, chunk_text(ch.text, max_chars=request.max_chars)) for ch in chapters]
+    return _summarize(chapter_chunks), chapter_chunks
 
 
 def run_conversion(
     request: ConversionRequest,
+    chapter_chunks: list[tuple[str, list[str]]] | None = None,
     on_progress: Callable[[ProgressEvent], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Path:
+    """If chapter_chunks is omitted, this runs the full plan (extraction
+    included) itself. Pass the result of a prior plan_conversion() call to
+    avoid re-running extraction/OCR/AI-review a second time -- both are
+    real costs, not free work to redo."""
     from book2audio.audio.mux import build_m4b, concat_wavs
     from book2audio.tts.chatterbox_backend import Narrator
 
     report = on_progress or (lambda _e: None)
     cancelled = should_cancel or (lambda: False)
 
-    report(ProgressEvent(stage="extracting", message=str(request.input_path)))
-    plan, chapter_chunks = plan_conversion(request)
+    if chapter_chunks is None:
+        report(ProgressEvent(stage="extracting", message=str(request.input_path)))
+        plan, chapter_chunks = plan_conversion(request, on_progress=on_progress)
+    else:
+        plan = _summarize(chapter_chunks)
+
     report(ProgressEvent(
         stage="chapter_detection",
         message=f"{len(plan.chapter_titles)} chapter(s), {plan.total_chunks} chunk(s)",
