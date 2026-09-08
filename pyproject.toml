@@ -16,6 +16,7 @@ dependencies = [
     "soundfile",
     "mutagen",
     "pillow",
+    "kokoro",  # fast/lightweight local TTS backend, alongside chatterbox-tts
     "typer",
     "rich",
     "PySide6",

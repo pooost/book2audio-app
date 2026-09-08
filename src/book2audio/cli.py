@@ -1,6 +1,7 @@
 """book2audio: turn a book into a narrated .m4b audiobook.
 
-    MarkItDown -> OpenOCR fallback -> Chatterbox Multilingual V3 -> FFmpeg -> .m4b
+    MarkItDown -> OpenOCR fallback -> cleanup -> Qwen review -> chunk ->
+    Chatterbox/Kokoro -> FFmpeg -> .m4b
 
 This is a thin frontend over book2audio.pipeline.convert -- the GUI
 (book2audio.gui) calls the exact same functions. No conversion logic lives
@@ -17,15 +18,18 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, Ti
 
 from book2audio.ingest.extract import ExtractionError
 from book2audio.ingest.page_select import PageRangeError
-from book2audio.processing.ai_review import AiReviewError
 from book2audio.pipeline.convert import (
     ChunkSynthesisError,
     ConversionCancelled,
     ConversionRequest,
     ProgressEvent,
+    default_output_stem,
     plan_conversion,
     run_conversion,
 )
+from book2audio.processing.ai_review import AiReviewError
+from book2audio.tts.factory import TTS_BACKENDS
+from book2audio.tts.provider import ModelMissingError
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -34,8 +38,10 @@ console = Console()
 @app.command()
 def convert(
     input_path: Path = typer.Argument(..., exists=True, help="Book: .pdf, .epub, an image, or a directory of scanned pages."),
-    output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output .m4b path. Defaults to INPUT_PATH with a .m4b extension."),
-    voice: Optional[Path] = typer.Option(None, "--voice", exists=True, dir_okay=False, help="Reference WAV/MP3 to clone as the narrator voice."),
+    output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output .m4b path. Defaults to INPUT_PATH with a .m4b extension (page-range-qualified if --pages is set)."),
+    tts: str = typer.Option("chatterbox", "--tts", help=f"Local TTS backend: {' or '.join(TTS_BACKENDS)}."),
+    voice: Optional[Path] = typer.Option(None, "--voice", exists=True, dir_okay=False, help="Chatterbox only: reference WAV/MP3 to clone as the narrator voice."),
+    kokoro_voice: str = typer.Option("af_heart", "--kokoro-voice", help="Kokoro only: named voice (see `book2audio doctor` for what's set up)."),
     language: str = typer.Option("en", "--language", help="Language code for narration."),
     device: str = typer.Option("auto", "--device", help="cuda, mps, cpu, or auto."),
     max_chars: int = typer.Option(300, "--max-chars", help="Max characters per TTS chunk."),
@@ -47,18 +53,26 @@ def convert(
     allow_download: bool = typer.Option(False, "--allow-download/--no-allow-download", help="Allow downloading a missing model during conversion (default: off -- run `book2audio setup-models` instead)."),
     bitrate: str = typer.Option("64k", "--bitrate", help="AAC bitrate for the output .m4b."),
     pages: Optional[str] = typer.Option(None, "--pages", help='PDF only. e.g. "1-10,15,20-25" (1-indexed, inclusive). Omit for the whole document.'),
-    ai_review: bool = typer.Option(False, "--ai-review/--no-ai-review", help="Run extracted text through a local Ollama model to fix OCR errors before narration. Off by default; requires Ollama running locally."),
+    ai_review: bool = typer.Option(False, "--ai-review/--no-ai-review", help="Run extracted text through a local Ollama vision model to fix OCR errors before narration. Off by default; requires Ollama running locally."),
     ai_review_model: str = typer.Option("qwen3-vl:4b-instruct", "--ai-review-model", help="Vision-capable Ollama model to use for --ai-review (compares OCR text against the page image)."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize."),
+    save_text_outputs: bool = typer.Option(True, "--save-text-outputs/--no-save-text-outputs", help="Write <output>.raw.md / .cleaned.md / .reviewed.md alongside the .m4b."),
+    extract_only: bool = typer.Option(False, "--extract-only", help="Extract, clean, (optionally) review, and save readable Markdown -- skip TTS/assembly entirely."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize. (Also saves text outputs; see --extract-only if that's the actual goal.)"),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
     if ocr_mode not in ("auto", "force", "never"):
         raise typer.BadParameter("--ocr-mode must be one of: auto, force, never")
+    if tts not in TTS_BACKENDS:
+        raise typer.BadParameter(f"--tts must be one of: {', '.join(TTS_BACKENDS)}")
+
+    output_path = output or input_path.with_name(default_output_stem(input_path, pages) + ".m4b")
 
     request = ConversionRequest(
         input_path=input_path,
-        output_path=output or input_path.with_suffix(".m4b"),
+        output_path=output_path,
         voice=voice,
+        kokoro_voice=kokoro_voice,
+        tts_backend=tts,
         language=language,
         device=device,
         max_chars=max_chars,
@@ -72,6 +86,8 @@ def convert(
         page_range=pages,
         ai_review=ai_review,
         ai_review_model=ai_review_model,
+        save_text_outputs=save_text_outputs,
+        extract_only=extract_only,
     )
 
     console.print(f"[bold]Extracting[/bold] {input_path} ...")
@@ -79,11 +95,16 @@ def convert(
     def on_plan_progress(event: ProgressEvent) -> None:
         if event.stage == "ai_review" and event.page_total:
             console.print(f"[bold]AI review[/bold] (vision model vs. page image) page {event.page_index}/{event.page_total}")
+        if event.stage == "extracting" and event.message:
+            console.print(event.message)
 
     try:
         plan, chapter_chunks = plan_conversion(request, on_progress=on_plan_progress)
     except (ValueError, ExtractionError, PageRangeError, AiReviewError) as e:
         raise typer.BadParameter(str(e)) from e
+
+    if plan.extraction_reused_cache:
+        console.print("[cyan]Reused cached extraction[/cyan] (input and settings unchanged since last run).")
 
     if ai_review:
         if plan.ai_review_applied:
@@ -93,9 +114,16 @@ def convert(
         elif plan.ai_review_skip_reason:
             console.print(f"[yellow]AI review skipped:[/yellow] {plan.ai_review_skip_reason}")
 
+    if plan.text_outputs_saved:
+        console.print(f"[bold]Saved readable text:[/bold] {', '.join(p.name for p in plan.text_outputs_saved)}")
+
     console.print(f"[bold]{len(plan.chapter_titles)}[/bold] chapter(s), [bold]{plan.total_chunks}[/bold] chunk(s), [bold]{plan.total_chars:,}[/bold] characters.")
     for ch_title, count in zip(plan.chapter_titles, plan.chunks_per_chapter):
         console.print(f"  - {ch_title}: {count} chunks")
+
+    if extract_only:
+        console.print("[green]Extraction complete.[/green] Skipping TTS (--extract-only).")
+        return
 
     if dry_run:
         console.print("[yellow]Dry run -- stopping before synthesis.[/yellow]")
@@ -107,18 +135,20 @@ def convert(
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
+        TextColumn("{task.fields[rtf]}"),
         console=console,
     ) as progress:
-        task = progress.add_task("Synthesizing", total=plan.total_chunks)
+        task = progress.add_task("Synthesizing", total=plan.total_chunks, rtf="")
         narrator_announced = False
 
         def on_progress(event: ProgressEvent) -> None:
             nonlocal narrator_announced
             if event.stage == "tts" and not narrator_announced and event.device:
-                console.print(f"[bold]Narrator ready[/bold] on device={event.device}")
+                console.print(f"[bold]Narrator ready[/bold] backend={event.tts_backend} device={event.device}")
                 narrator_announced = True
             if event.stage == "tts" and event.chunk_index:
-                progress.update(task, completed=event.chunk_index)
+                rtf_str = f"RTF {event.rtf:.2f}" if event.rtf is not None else ""
+                progress.update(task, completed=event.chunk_index, rtf=rtf_str)
             if event.stage == "assembling":
                 console.print("[bold]Muxing[/bold] chapters into .m4b ...")
 
@@ -133,6 +163,9 @@ def convert(
         except ConversionCancelled as e:
             console.print(f"[yellow]{e}[/yellow]")
             raise typer.Exit(code=130) from e
+        except ModelMissingError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=1) from e
 
     console.print(f"[green]Done.[/green] Wrote {request.output_path}")
 
@@ -143,9 +176,11 @@ def doctor():
     from book2audio.core.doctor import run_doctor
 
     report = run_doctor()
-    for check in report.checks:
-        mark = "[green]OK[/green]  " if check.ok else "[red]MISSING[/red]"
-        console.print(f"{mark} {check.name}: {check.detail}")
+    for category, label in (("system", "SYSTEM"), ("text", "TEXT"), ("tts", "TTS")):
+        console.print(f"\n[bold underline]{label}[/bold underline]")
+        for check in report.by_category(category):
+            mark = "[green]OK[/green]  " if check.ok else ("[yellow]OPT[/yellow]  " if check.optional else "[red]MISSING[/red]")
+            console.print(f"{mark} {check.name}: {check.detail}")
 
     if not report.all_ok:
         console.print("\n[yellow]Some checks failed. If models are missing, run `book2audio setup-models`.[/yellow]")
@@ -153,14 +188,19 @@ def doctor():
 
 
 @app.command("setup-models")
-def setup_models_cmd():
-    """Explicitly download Chatterbox + OpenOCR model weights. Never run implicitly."""
-    from book2audio.core.models import setup_models
+def setup_models_cmd(
+    tts: str = typer.Option("chatterbox", "--tts", help=f"Which TTS backend to set up: {', '.join(TTS_BACKENDS)}, or 'all'."),
+):
+    """Explicitly download TTS + OpenOCR model weights. Never run implicitly."""
+    from book2audio.core.models import TTS_CHOICES, setup_models
+
+    if tts not in TTS_CHOICES:
+        raise typer.BadParameter(f"--tts must be one of: {', '.join(TTS_CHOICES)}")
 
     def report(msg: str) -> None:
         console.print(f"[bold]{msg}[/bold]")
 
-    setup_models(progress=report)
+    setup_models(progress=report, tts=tts)
     console.print("[green]Done.[/green] Models are cached for offline use.")
 
 
