@@ -34,7 +34,19 @@ class Chapter:
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 _TRAILING_PAGE_NUMBER = re.compile(r"\s*\d+\s*$")
+_LEADING_PAGE_NUMBER = re.compile(r"^\s*\d+\s*")
 _SENTENCE_ENDING = re.compile(r'[.!?"\')\]]$')
+# Unambiguous page-furniture signals: a print-export filename (Foo.indd,
+# Foo.docx), a date (06/12/2011), or a time (14:26). A line matching one
+# of these is never legitimate running prose, so every occurrence is
+# removed. Text with none of these signals (e.g. a bare title-case phrase)
+# is genuinely ambiguous -- see the docstring below for why those are
+# handled differently.
+_STRONG_FURNITURE_SIGNAL = re.compile(
+    r"\.\w{2,4}\b"  # filename extension: PRINT.indd, file.docx
+    r"|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}"  # date: 06/12/2011, 06-12-2011
+    r"|\b\d{1,2}:\d{2}\b"  # time: 14:26
+)
 REPEATED_LINE_MIN_OCCURRENCES = 3
 REPEATED_LINE_MAX_LENGTH = 80
 
@@ -48,30 +60,70 @@ def _strip_repeated_lines(text: str) -> str:
     Qwen's narration cleanup only ever sees one local chunk at a time, so
     it has no way to notice a line is repeated dozens of pages apart.
 
-    Guarded against false positives on legitimately repeated short prose
-    (e.g. a one-word line of dialogue like "Yes." appearing several
-    times): real running headers/footers are essentially never complete
-    sentences, so a line ending in terminal punctuation is never treated
-    as furniture regardless of how often it recurs.
+    Guarded against two distinct false-positive risks:
+
+    1. Legitimately repeated short prose (e.g. a one-word line of dialogue
+       like "Yes." appearing several times): real running headers/footers
+       are essentially never complete sentences, so a line ending in
+       terminal punctuation is never treated as furniture regardless of
+       how often it recurs.
+
+    2. A chapter/section title that HAPPENS to be reused as the running
+       header on every subsequent page of that chapter (a common print
+       layout: "Technical Mentality" printed once as the real heading,
+       then again as a running head on pages 3, 5, 7, 9...). Blindly
+       stripping every occurrence of a repeated line deletes the real
+       title along with the furniture copies -- reproduced and confirmed
+       on a real book, not hypothetical. Fix: only strip every occurrence
+       for lines matching a strong, unambiguous furniture signal (a
+       filename extension, a date, or a time -- content prose essentially
+       never looks like these). A repeated line with none of those
+       signals keeps its first occurrence (plausibly the real heading)
+       and only strips the 2nd+ (plausibly the running-header copies).
     """
     lines = text.split("\n")
 
     def normalize(line: str) -> str:
-        # Strip a trailing page number so "Foo.indd 9" and "Foo.indd 214"
-        # are recognized as the same recurring line.
-        return _TRAILING_PAGE_NUMBER.sub("", line.strip())
+        # Strip a leading OR trailing page number so "Foo.indd 9" /
+        # "Foo.indd 214" (trailing -- common footer convention) and
+        # "6 Running Header" / "8 Running Header" (leading -- common
+        # two-sided-book convention, page number on the outer margin
+        # alternating sides) both collapse to the same recurring line.
+        stripped = line.strip()
+        return _LEADING_PAGE_NUMBER.sub("", _TRAILING_PAGE_NUMBER.sub("", stripped)).strip()
 
     counts = Counter(normalize(line) for line in lines if normalize(line))
+    kept_first_occurrence: set[str] = set()
 
-    def is_furniture(line: str) -> bool:
+    def should_drop(line: str) -> bool:
         norm = normalize(line)
         if not norm or len(norm) >= REPEATED_LINE_MAX_LENGTH:
             return False
         if _SENTENCE_ENDING.search(norm):
             return False
-        return counts[norm] >= REPEATED_LINE_MIN_OCCURRENCES
+        if counts[norm] < REPEATED_LINE_MIN_OCCURRENCES:
+            return False
 
-    return "\n".join(line for line in lines if not is_furniture(line))
+        # Check the furniture signal against the ORIGINAL line, not the
+        # normalized one: normalize()'s leading-page-number strip mangles
+        # a date like "06/12/2011" into "/12/2011" (eating the day as if
+        # it were a page number), which then fails to match the date
+        # pattern below -- reproduced live against a real 30-times-
+        # repeated timestamp footer, where exactly one of the thirty
+        # occurrences fell through to the "keep first" branch instead of
+        # being dropped like the other twenty-nine, purely because of
+        # this ordering bug.
+        if _STRONG_FURNITURE_SIGNAL.search(line.strip()):
+            return True  # unambiguous furniture -- drop every occurrence
+
+        # Ambiguous (could be a genuine, once-only heading): keep the
+        # first occurrence, drop the rest.
+        if norm in kept_first_occurrence:
+            return True
+        kept_first_occurrence.add(norm)
+        return False
+
+    return "\n".join(line for line in lines if not should_drop(line))
 
 
 def clean_text(raw: str) -> str:
