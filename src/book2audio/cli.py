@@ -57,7 +57,7 @@ def convert(
     ai_review_model: str = typer.Option("qwen3-vl:4b-instruct", "--ai-review-model", help="Vision-capable Ollama model to use for --ai-review (compares OCR text against the page image)."),
     save_text_outputs: bool = typer.Option(True, "--save-text-outputs/--no-save-text-outputs", help="Write <output>.raw.md / .cleaned.md / .reviewed.md alongside the .m4b."),
     extract_only: bool = typer.Option(False, "--extract-only", help="Extract, clean, (optionally) review, and save readable Markdown -- skip TTS/assembly entirely."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize. (Also saves text outputs; see --extract-only if that's the actual goal.)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Pure preview: report chapter/chunk counts, don't synthesize, don't save text files. For the latter, use --extract-only instead."),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
     if ocr_mode not in ("auto", "force", "never"):
@@ -89,6 +89,14 @@ def convert(
         save_text_outputs=save_text_outputs,
         extract_only=extract_only,
     )
+
+    # --dry-run is a pure preview: no filesystem side effects beyond
+    # cache/bookkeeping. --extract-only is the actual "give me the text"
+    # operation and does write .md files. Without this, both looked nearly
+    # identical (both extracted and saved text, differing only in the
+    # printed message) -- not what a distinct --extract-only flag implies.
+    if dry_run and not extract_only:
+        request.save_text_outputs = False
 
     console.print(f"[bold]Extracting[/bold] {input_path} ...")
 
