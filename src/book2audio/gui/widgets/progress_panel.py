@@ -5,6 +5,13 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
+def _format_seconds(seconds: float) -> str:
+    seconds = int(seconds)
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    return f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+
 STAGE_LABELS = {
     "extracting": "Extracting text",
     "ocr": "Running OCR",
@@ -75,8 +82,14 @@ class ProgressPanel(QWidget):
             self.bar.setValue(event.page_index)
 
         details = []
+        if event.tts_backend:
+            details.append(f"backend: {event.tts_backend}")
         if event.device:
             details.append(f"device: {event.device}")
+        if event.rtf is not None:
+            details.append(f"RTF: {event.rtf:.2f}")
+        if event.eta_seconds is not None:
+            details.append(f"ETA: {_format_seconds(event.eta_seconds)}")
         if event.message:
             details.append(event.message)
         self.detail_label.setText(" -- ".join(details))

@@ -32,8 +32,16 @@ class OutputSettingsWidget(QWidget):
         self.format_combo.addItems(OUTPUT_FORMATS)
         layout.addRow("Format:", self.format_combo)
 
-    def output_path(self, input_path: Path | None) -> Path:
-        stem = self.filename_edit.text().strip() or (input_path.stem if input_path else "audiobook")
+    def output_path(self, input_path: Path | None, page_range: str | None = None) -> Path:
+        explicit = self.filename_edit.text().strip()
+        if explicit:
+            stem = explicit
+        elif input_path is not None:
+            from book2audio.pipeline.convert import default_output_stem
+
+            stem = default_output_stem(input_path, page_range)
+        else:
+            stem = "audiobook"
         ext = self.format_combo.currentText()
         return Path(self.dir_edit.text()).expanduser() / f"{stem}.{ext}"
 

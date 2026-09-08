@@ -44,20 +44,32 @@ class DoctorDialog(QDialog):
         from book2audio.core.doctor import run_doctor
 
         report = run_doctor()
+        categories = (("system", "SYSTEM"), ("text", "TEXT"), ("tts", "TTS"))
+        total_rows = len(report.checks) + len(categories)
+        self.table.setRowCount(total_rows)
 
-        self.table.setRowCount(len(report.checks))
-        for row, check in enumerate(report.checks):
-            name_item = QTableWidgetItem(check.name)
-            if check.ok:
-                prefix, color = "OK -- ", _green()
-            elif check.optional:
-                prefix, color = "OPTIONAL -- ", _neutral()
-            else:
-                prefix, color = "MISSING -- ", _red()
-            result_item = QTableWidgetItem(prefix + check.detail)
-            result_item.setForeground(color)
-            self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, result_item)
+        row = 0
+        for category, label in categories:
+            header_item = QTableWidgetItem(label)
+            header_item.setFont(_bold_font(header_item))
+            self.table.setItem(row, 0, header_item)
+            self.table.setItem(row, 1, QTableWidgetItem(""))
+            row += 1
+
+            for check in report.by_category(category):
+                name_item = QTableWidgetItem(f"    {check.name}")
+                if check.ok:
+                    prefix, color = "OK -- ", _green()
+                elif check.optional:
+                    prefix, color = "OPTIONAL -- ", _neutral()
+                else:
+                    prefix, color = "MISSING -- ", _red()
+                result_item = QTableWidgetItem(prefix + check.detail)
+                result_item.setForeground(color)
+                self.table.setItem(row, 0, name_item)
+                self.table.setItem(row, 1, result_item)
+                row += 1
+
         self.table.resizeColumnsToContents()
 
         if report.all_ok:
@@ -85,3 +97,9 @@ def _neutral():
     from PySide6.QtGui import QColor
 
     return QColor("#9e9e9e")
+
+
+def _bold_font(item):
+    font = item.font()
+    font.setBold(True)
+    return font

@@ -3,6 +3,8 @@ background worker thread -- no conversion logic lives here, only UI glue."""
 
 from pathlib import Path
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -33,6 +35,7 @@ class MainWindow(QMainWindow):
 
         self._worker: ConversionWorker | None = None
         self._last_plan = None
+        self._last_output_path: Path | None = None
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -72,6 +75,19 @@ class MainWindow(QMainWindow):
         self.progress_panel = ProgressPanel()
         layout.addWidget(self.progress_panel)
 
+        results_row = QHBoxLayout()
+        self.open_folder_button = QPushButton("Open Output Folder")
+        self.open_folder_button.clicked.connect(self._open_output_folder)
+        results_row.addWidget(self.open_folder_button)
+        self.open_text_button = QPushButton("Open Final Text")
+        self.open_text_button.clicked.connect(self._open_final_text)
+        results_row.addWidget(self.open_text_button)
+        self.open_audiobook_button = QPushButton("Open Audiobook")
+        self.open_audiobook_button.clicked.connect(self._open_audiobook)
+        results_row.addWidget(self.open_audiobook_button)
+        layout.addLayout(results_row)
+        self._set_results_buttons_visible(False)
+
         diagnostics_button = QPushButton("System / Diagnostics...")
         diagnostics_button.clicked.connect(self._open_diagnostics)
         layout.addWidget(diagnostics_button)
@@ -105,23 +121,48 @@ class MainWindow(QMainWindow):
                 return None
 
         if self.processing_settings.ai_review():
-            from book2audio.processing.ai_review import is_ollama_available
+            from book2audio.processing.ai_review import DEFAULT_MODEL, is_ollama_available
 
             if not is_ollama_available():
                 QMessageBox.warning(
                     self, "Ollama not reachable",
                     "AI review is on, but no local Ollama server was found at "
                     "http://localhost:11434.\n\nInstall Ollama and run "
-                    "`ollama pull llama3.2`, or turn AI review off.",
+                    f"`ollama pull {DEFAULT_MODEL}`, or turn AI review off.",
                 )
                 return None
 
-        output_path = self.output_settings.output_path(input_path)
+        backend = self.voice_settings.backend()
+        if backend == "kokoro":
+            from book2audio.tts.kokoro_backend import is_model_cached as kokoro_cached
+
+            if not kokoro_cached(self.voice_settings.kokoro_voice()):
+                QMessageBox.warning(
+                    self, "Kokoro not set up",
+                    f"Kokoro voice {self.voice_settings.kokoro_voice()!r} (or the core model) isn't "
+                    "downloaded yet.\n\nRun `book2audio setup-models --tts kokoro` in a terminal, "
+                    "then try again.",
+                )
+                return None
+        elif backend == "chatterbox":
+            from book2audio.tts.chatterbox_backend import is_model_cached as chatterbox_cached
+
+            if not chatterbox_cached():
+                QMessageBox.warning(
+                    self, "Chatterbox not set up",
+                    "Chatterbox model files aren't downloaded yet.\n\n"
+                    "Run `book2audio setup-models` in a terminal, then try again.",
+                )
+                return None
+
+        output_path = self.output_settings.output_path(input_path, page_range)
 
         return ConversionRequest(
             input_path=input_path,
             output_path=output_path,
             voice=self.voice_settings.voice_path(),
+            kokoro_voice=self.voice_settings.kokoro_voice(),
+            tts_backend=backend,
             language=self.voice_settings.language_code(),
             device="auto",
             max_chars=self.advanced_panel.max_chars(),
@@ -135,6 +176,7 @@ class MainWindow(QMainWindow):
             page_range=page_range,
             ai_review=self.processing_settings.ai_review(),
             ai_review_model=self.processing_settings.ai_review_model(),
+            save_text_outputs=self.processing_settings.save_text_outputs(),
         )
 
     def _start_conversion(self) -> None:
@@ -144,8 +186,10 @@ class MainWindow(QMainWindow):
 
         self._set_running(True)
         self.progress_panel.start()
+        self._set_results_buttons_visible(False)
 
         self._last_plan = None
+        self._last_output_path = request.output_path
         self._worker = ConversionWorker(request)
         self._worker.progress.connect(self.progress_panel.update_from_event)
         self._worker.plan_ready.connect(self._on_plan_ready)
@@ -182,6 +226,8 @@ class MainWindow(QMainWindow):
     def _on_finished(self, output_path: str) -> None:
         self._set_running(False)
         self.progress_panel.stop()
+        self._last_output_path = Path(output_path)
+        self._set_results_buttons_visible(True)
 
         message = f"Audiobook saved to:\n{output_path}"
         if self._last_plan is not None and self._last_plan.review_flags:
@@ -207,3 +253,29 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         self.progress_panel.stop()
         QMessageBox.information(self, "Cancelled", "Conversion cancelled. Completed chunks are cached -- click Convert again to resume.")
+
+    def _set_results_buttons_visible(self, visible: bool) -> None:
+        self.open_folder_button.setVisible(visible)
+        self.open_text_button.setVisible(visible)
+        self.open_audiobook_button.setVisible(visible)
+
+    def _open_output_folder(self) -> None:
+        if self._last_output_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_path.parent)))
+
+    def _open_final_text(self) -> None:
+        # Prefer reviewed > cleaned > raw, per spec.
+        if self._last_plan is not None and self._last_plan.text_outputs_saved:
+            by_name = {p.name: p for p in self._last_plan.text_outputs_saved}
+            for suffix in ("reviewed.md", "cleaned.md", "raw.md"):
+                for name, path in by_name.items():
+                    if name.endswith(suffix) and path.exists():
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+                        return
+        QMessageBox.information(self, "No text file", "No saved text output is available for this run.")
+
+    def _open_audiobook(self) -> None:
+        if self._last_output_path is not None and self._last_output_path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_path)))
+        else:
+            QMessageBox.information(self, "No audiobook", "No audiobook file is available for this run.")

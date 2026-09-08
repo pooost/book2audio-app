@@ -30,6 +30,10 @@ class ProcessingSettingsWidget(QWidget):
         self.offline_check.setChecked(True)
         layout.addRow("", self.offline_check)
 
+        self.save_text_check = QCheckBox("Save readable text files (.raw.md / .cleaned.md / .reviewed.md)")
+        self.save_text_check.setChecked(True)
+        layout.addRow("", self.save_text_check)
+
         self.ai_review_check = QCheckBox("AI review: compare OCR text against each page image with a local vision model")
         self.ai_review_check.setChecked(False)
         self.ai_review_check.toggled.connect(self._on_ai_review_toggled)
@@ -51,6 +55,9 @@ class ProcessingSettingsWidget(QWidget):
 
     def allow_download(self) -> bool:
         return not self.offline_check.isChecked()
+
+    def save_text_outputs(self) -> bool:
+        return self.save_text_check.isChecked()
 
     def ai_review(self) -> bool:
         return self.ai_review_check.isChecked()
