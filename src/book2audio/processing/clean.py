@@ -1,6 +1,7 @@
 """Turn raw extracted Markdown into clean prose, split into chapters."""
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 _HYPHEN_LINEBREAK = re.compile(r"(\w)-\n(\w)")
@@ -32,6 +33,46 @@ class Chapter:
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+_TRAILING_PAGE_NUMBER = re.compile(r"\s*\d+\s*$")
+_SENTENCE_ENDING = re.compile(r'[.!?"\')\]]$')
+REPEATED_LINE_MIN_OCCURRENCES = 3
+REPEATED_LINE_MAX_LENGTH = 80
+
+
+def _strip_repeated_lines(text: str) -> str:
+    """Strip running headers/footers: a line that recurs many times across
+    the whole document (e.g. a print-export footer like "Book PRINT.indd
+    9", stamped fresh on every page with only the page number changing,
+    or a repeated production timestamp) is page layout furniture, not
+    authored content. This can only work at the whole-document level --
+    Qwen's narration cleanup only ever sees one local chunk at a time, so
+    it has no way to notice a line is repeated dozens of pages apart.
+
+    Guarded against false positives on legitimately repeated short prose
+    (e.g. a one-word line of dialogue like "Yes." appearing several
+    times): real running headers/footers are essentially never complete
+    sentences, so a line ending in terminal punctuation is never treated
+    as furniture regardless of how often it recurs.
+    """
+    lines = text.split("\n")
+
+    def normalize(line: str) -> str:
+        # Strip a trailing page number so "Foo.indd 9" and "Foo.indd 214"
+        # are recognized as the same recurring line.
+        return _TRAILING_PAGE_NUMBER.sub("", line.strip())
+
+    counts = Counter(normalize(line) for line in lines if normalize(line))
+
+    def is_furniture(line: str) -> bool:
+        norm = normalize(line)
+        if not norm or len(norm) >= REPEATED_LINE_MAX_LENGTH:
+            return False
+        if _SENTENCE_ENDING.search(norm):
+            return False
+        return counts[norm] >= REPEATED_LINE_MIN_OCCURRENCES
+
+    return "\n".join(line for line in lines if not is_furniture(line))
+
 
 def clean_text(raw: str) -> str:
     text = _CONTROL_CHARS.sub(" ", raw)
@@ -43,6 +84,7 @@ def clean_text(raw: str) -> str:
         if not _PAGE_NUMBER_LINE.match(line.strip())
     ]
     text = "\n".join(lines)
+    text = _strip_repeated_lines(text)
 
     text = _FOOTNOTE_MARKER.sub("", text)
     text = _GLUED_FOOTNOTE_REF.sub("", text)

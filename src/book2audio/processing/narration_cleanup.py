@@ -31,7 +31,7 @@ TEMPERATURE = 0.1
 # change output -- it's part of the cache key, so a bump invalidates old
 # cached cleanup results instead of silently reusing them under a
 # different prompt.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 CLEANUP_PROMPT = """You are the text-cleanup stage of a local audiobook conversion application.
 
@@ -42,6 +42,8 @@ Your job is to repair obvious OCR corruption so the text can be read naturally b
 Correct broken words, accidental spaces, OCR character substitutions, malformed punctuation, duplicated fragments, broken line-break hyphenation, and obvious recognition errors.
 
 Remove meaningless OCR garbage such as random digit/symbol sequences when context clearly shows they are not part of the text.
+
+Remove page-layout production artifacts that are not part of the authored text: running headers/footers, print-export filenames (e.g. "Book Title PRINT.indd 9"), page-generation timestamps, and isolated page numbers. These would sound like nonsense interruptions if read aloud mid-sentence. Only remove them when they are clearly disconnected from the surrounding sentence, not when a date, number, or filename is part of the actual authored sentence.
 
 Use linguistic context and general knowledge to reconstruct obvious corrupted words.
 

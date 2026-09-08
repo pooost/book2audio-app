@@ -179,6 +179,21 @@ class TestCleanupExamples:
         assert "political system" in result
         assert "rapid change" in result
 
+    def test_isolated_print_export_footer_removed(self):
+        """A header/footer appearing only ONCE in this chunk -- below the
+        deterministic repeated-line stripper's 3-occurrence threshold
+        (see test_clean.py), so this specifically tests Qwen's own
+        capability as the secondary safety net, from local context alone."""
+        text = (
+            "This chapter examines the political stakes of the argument in detail.\n\n"
+            "De BOEVER PRINT.indd 9\n\n"
+            "The next section continues the discussion of technical objects and their genesis."
+        )
+        result = cleanup_chunk(text)
+        assert "PRINT.indd" not in result
+        assert "political stakes" in result
+        assert "technical objects" in result
+
     def test_legitimate_year_preserved(self):
         result = cleanup_chunk("The novel was published in 1984.")
         assert "1984" in result
