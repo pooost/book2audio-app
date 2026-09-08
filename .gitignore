@@ -11,3 +11,6 @@ dist/
 *.m4b
 *_cache/
 ocr-test/
+*.log
+.DS_Store
+Thumbs.db
