@@ -198,15 +198,17 @@ def _save_extraction(request: ConversionRequest, extracted) -> list[Path]:
     (cache_dir / "extraction_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     # Only written when --debug-narration-cleanup was passed (extracted.
-    # cleanup_audit is empty otherwise) -- keeps the normal cache dir free
-    # of per-chunk debug clutter.
+    # cleanup_audit is empty otherwise) -- keeps the output directory free
+    # of per-chunk debug clutter unless debug mode is actually on. Lives
+    # alongside the other .md outputs (not just the cache dir) so it's
+    # actually discoverable via "Open Output Folder" in the GUI.
     if extracted.cleanup_audit:
         audit_data = [
             {"chunk_index": e.chunk_index, "input": e.input_text, "output": e.output_text,
              "model": e.model, "status": e.status}
             for e in extracted.cleanup_audit
         ]
-        (cache_dir / "narration_cleanup_debug.json").write_text(json.dumps(audit_data, indent=2), encoding="utf-8")
+        write("narration_debug.json", json.dumps(audit_data, indent=2))
 
     return saved
 

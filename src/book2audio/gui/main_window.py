@@ -177,6 +177,7 @@ class MainWindow(QMainWindow):
             narration_cleanup=self.processing_settings.narration_cleanup(),
             narration_cleanup_model=self.processing_settings.narration_cleanup_model(),
             save_text_outputs=self.processing_settings.save_text_outputs(),
+            debug_narration_cleanup=self.advanced_panel.debug_narration_cleanup(),
         )
 
     def _start_conversion(self) -> None:

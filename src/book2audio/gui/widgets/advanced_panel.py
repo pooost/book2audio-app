@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -62,6 +63,10 @@ class AdvancedPanel(QWidget):
         cache_row.addWidget(cache_browse)
         form.addRow("Cache directory:", cache_row)
 
+        self.debug_cleanup_check = QCheckBox("Save narration cleanup debug log (per-chunk input/output)")
+        self.debug_cleanup_check.setChecked(False)
+        form.addRow("", self.debug_cleanup_check)
+
         outer.addWidget(self.content)
 
     def _on_toggled(self, checked: bool) -> None:
@@ -77,6 +82,9 @@ class AdvancedPanel(QWidget):
     def cache_dir(self) -> Path | None:
         text = self.cache_dir_edit.text().strip()
         return Path(text).expanduser() if text else None
+
+    def debug_narration_cleanup(self) -> bool:
+        return self.debug_cleanup_check.isChecked()
 
     def _choose_cache_dir(self) -> None:
         path_str = QFileDialog.getExistingDirectory(self, "Choose cache directory", str(Path.home()))

@@ -88,26 +88,3 @@ def _run_merged(input_path: Path, output_dir: Path, allow_download: bool) -> str
     if not md_files:
         raise OcrError(f"openocr produced no markdown output for {input_path} in {output_dir}")
     return "\n\n".join(f.read_text(encoding="utf-8", errors="ignore") for f in md_files)
-
-
-def run_openocr_batch(page_image_paths: list[Path], output_dir: Path, allow_download: bool = True) -> dict[Path, str]:
-    """Run OCR over multiple page images in a single openocr invocation (one
-    model load instead of one per page). All paths must share a parent
-    directory containing only these images (openocr processes every file it
-    finds there). Returns {image_path: ocr_text}, in the given order."""
-    if not page_image_paths:
-        return {}
-
-    input_dir = page_image_paths[0].parent
-    if any(p.parent != input_dir for p in page_image_paths):
-        raise OcrError("run_openocr_batch requires all page images in the same directory")
-
-    _run_openocr_cmd(input_dir, output_dir, allow_download)
-
-    results: dict[Path, str] = {}
-    for image_path in page_image_paths:
-        md_path = output_dir / image_path.stem / f"{image_path.stem}.md"
-        if not md_path.exists():
-            raise OcrError(f"openocr produced no output for {image_path} (expected {md_path})")
-        results[image_path] = md_path.read_text(encoding="utf-8", errors="ignore")
-    return results
