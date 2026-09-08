@@ -6,6 +6,7 @@ doesn't re-synthesize anything.
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 import torch
@@ -67,7 +68,12 @@ class Narrator:
             kwargs["audio_prompt_path"] = self.audio_prompt_path
 
         audio = self.model.generate(text, **kwargs)
-        torchaudio.save(str(out_path), audio, self.sample_rate)
+        # torchaudio.save isn't atomic -- write to a sibling temp file and
+        # rename, so a killed/crashed run never leaves a partial .wav that a
+        # resumed run would mistake for a finished, cached chunk.
+        tmp_path = out_path.with_suffix(".wav.tmp")
+        torchaudio.save(str(tmp_path), audio, self.sample_rate)
+        os.replace(tmp_path, out_path)
         return out_path
 
     def _cache_key(self, text: str, language: str) -> str:

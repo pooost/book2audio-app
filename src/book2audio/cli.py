@@ -23,7 +23,7 @@ console = Console()
 def convert(
     input_path: Path = typer.Argument(..., exists=True, help="Book: .pdf, .epub, an image, or a directory of scanned pages."),
     output: Path = typer.Option(..., "-o", "--output", help="Output .m4b path."),
-    voice: Optional[Path] = typer.Option(None, "--voice", help="Reference WAV/MP3 to clone as the narrator voice."),
+    voice: Optional[Path] = typer.Option(None, "--voice", exists=True, dir_okay=False, help="Reference WAV/MP3 to clone as the narrator voice."),
     language: str = typer.Option("en", "--language", help="Language code for narration."),
     device: str = typer.Option("auto", "--device", help="cuda, mps, cpu, or auto."),
     max_chars: int = typer.Option(DEFAULT_MAX_CHARS, "--max-chars", help="Max characters per TTS chunk."),
@@ -33,7 +33,7 @@ def convert(
     dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize."),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
-    cache_dir = cache_dir or output.with_suffix("") .with_name(output.stem + "_cache")
+    cache_dir = cache_dir or output.with_name(output.stem + "_cache")
     book_title = title or input_path.stem
 
     console.print(f"[bold]Extracting[/bold] {input_path} ...")

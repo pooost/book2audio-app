@@ -5,33 +5,37 @@ import tempfile
 from pathlib import Path
 
 
+class MuxError(Exception):
+    pass
+
+
+def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise MuxError(f"{cmd[0]} failed:\n{e.stderr}") from e
+
+
 def concat_wavs(wav_paths: list[Path], out_path: Path) -> None:
     if not wav_paths:
         raise ValueError("no wav files to concatenate")
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         for p in wav_paths:
-            f.write(f"file '{p.resolve()}'\n")
+            # ffmpeg's concat-demuxer quoting: a literal single quote inside
+            # the path must become '\'' (close quote, escaped quote, reopen).
+            escaped = str(p.resolve()).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
         list_path = Path(f.name)
 
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(out_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(out_path)])
     finally:
         list_path.unlink(missing_ok=True)
 
 
 def get_duration_seconds(path: Path) -> float:
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)])
     return float(result.stdout.strip())
 
 
@@ -74,21 +78,16 @@ def build_m4b(
         metadata_path.write_text("\n".join(lines), encoding="utf-8")
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", str(master_wav),
-                "-i", str(metadata_path),
-                "-map_metadata", "1",
-                "-map", "0:a",
-                "-c:a", "aac",
-                "-b:a", bitrate,
-                str(out_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _run([
+            "ffmpeg", "-y",
+            "-i", str(master_wav),
+            "-i", str(metadata_path),
+            "-map_metadata", "1",
+            "-map", "0:a",
+            "-c:a", "aac",
+            "-b:a", bitrate,
+            str(out_path),
+        ])
 
 
 def _escape(value: str) -> str:
