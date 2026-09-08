@@ -151,6 +151,41 @@ class TestStripRepeatedLines:
         cleaned = clean_text(raw)
         assert "Some Running Header" in cleaned
 
+    def test_generalizes_to_a_different_book_never_seen_before(self):
+        """The stripper is pattern-based (repetition count + short length +
+        no terminal punctuation + optional strong furniture signal), not
+        tuned to any specific book's text. Proof: a synthetic novel with
+        entirely different running-header/footer text than every other
+        test in this file (which all derive from the real Simondon PDF
+        used during development) is handled the same way, with no
+        book-specific configuration."""
+        raw = "\n\n".join([
+            "MIDNIGHT ARCHIVES: A Novel",
+            "The rain had not stopped for three days, and the city felt smaller for it.",
+            "Copyright 2019 Ashgrove Press - Draft v3.docx",
+            "She walked past the old clock tower without looking up.",
+            "MIDNIGHT ARCHIVES: A Novel",
+            "The letter had arrived that morning, unsigned and unexplained.",
+            "Copyright 2019 Ashgrove Press - Draft v3.docx",
+            "He read it twice before folding it back into the envelope.",
+            "MIDNIGHT ARCHIVES: A Novel",
+            "Something about the handwriting felt familiar, though he couldn't place it.",
+            "Copyright 2019 Ashgrove Press - Draft v3.docx",
+            "By the time he reached the station, the rain had turned to sleet.",
+        ])
+        cleaned = clean_text(raw)
+
+        # Ambiguous running title (no filename/date/time signal): first
+        # occurrence kept once, same as the real "Technical Mentality" case.
+        assert cleaned.count("MIDNIGHT ARCHIVES: A Novel") == 1
+        # Unambiguous furniture (matches the .docx filename signal): every
+        # occurrence removed.
+        assert "Ashgrove Press" not in cleaned
+        assert ".docx" not in cleaned
+        assert "rain had not stopped" in cleaned
+        assert "handwriting felt familiar" in cleaned
+        assert "turned to sleet" in cleaned
+
     def test_long_repeated_line_not_stripped(self):
         """A line >= REPEATED_LINE_MAX_LENGTH is treated as real content
         even if it recurs -- headers/footers are short by nature; a long
