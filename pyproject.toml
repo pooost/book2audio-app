@@ -22,6 +22,9 @@ dependencies = [
     "PySide6",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 book2audio = "book2audio.cli:main"
 book2audio-gui = "book2audio.gui.app:main"

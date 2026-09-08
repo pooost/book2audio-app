@@ -120,15 +120,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid page range", str(e))
                 return None
 
-        if self.processing_settings.ai_review():
-            from book2audio.processing.ai_review import DEFAULT_MODEL, is_ollama_available
+        if self.processing_settings.narration_cleanup():
+            from book2audio.processing.narration_cleanup import DEFAULT_MODEL, is_ollama_available
 
             if not is_ollama_available():
                 QMessageBox.warning(
                     self, "Ollama not reachable",
-                    "AI review is on, but no local Ollama server was found at "
+                    "Narration cleanup is on, but no local Ollama server was found at "
                     "http://localhost:11434.\n\nInstall Ollama and run "
-                    f"`ollama pull {DEFAULT_MODEL}`, or turn AI review off.",
+                    f"`ollama pull {DEFAULT_MODEL}`, or turn narration cleanup off.",
                 )
                 return None
 
@@ -174,8 +174,8 @@ class MainWindow(QMainWindow):
             allow_download=self.processing_settings.allow_download(),
             bitrate=self.advanced_panel.bitrate(),
             page_range=page_range,
-            ai_review=self.processing_settings.ai_review(),
-            ai_review_model=self.processing_settings.ai_review_model(),
+            narration_cleanup=self.processing_settings.narration_cleanup(),
+            narration_cleanup_model=self.processing_settings.narration_cleanup_model(),
             save_text_outputs=self.processing_settings.save_text_outputs(),
         )
 
@@ -230,11 +230,6 @@ class MainWindow(QMainWindow):
         self._set_results_buttons_visible(True)
 
         message = f"Audiobook saved to:\n{output_path}"
-        if self._last_plan is not None and self._last_plan.review_flags:
-            flags = self._last_plan.review_flags
-            preview = "\n".join(f"- {f}" for f in flags[:10])
-            more = f"\n(+{len(flags) - 10} more)" if len(flags) > 10 else ""
-            message += f"\n\nAI review flagged {len(flags)} uncertain passage(s):\n{preview}{more}"
         QMessageBox.information(self, "Done", message)
 
     def _on_failed(self, message: str, failure) -> None:
@@ -264,10 +259,10 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_path.parent)))
 
     def _open_final_text(self) -> None:
-        # Prefer reviewed > cleaned > raw, per spec.
+        # Prefer narration > cleaned > raw, per spec.
         if self._last_plan is not None and self._last_plan.text_outputs_saved:
             by_name = {p.name: p for p in self._last_plan.text_outputs_saved}
-            for suffix in ("reviewed.md", "cleaned.md", "raw.md"):
+            for suffix in ("narration.md", "cleaned.md", "raw.md"):
                 for name, path in by_name.items():
                     if name.endswith(suffix) and path.exists():
                         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))

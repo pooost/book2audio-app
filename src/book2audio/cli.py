@@ -1,7 +1,7 @@
 """book2audio: turn a book into a narrated .m4b audiobook.
 
-    MarkItDown -> OpenOCR fallback -> cleanup -> Qwen review -> chunk ->
-    Chatterbox/Kokoro -> FFmpeg -> .m4b
+    MarkItDown -> OpenOCR fallback -> cleanup -> Qwen narration cleanup
+    (text-only) -> chunk -> Chatterbox/Kokoro -> FFmpeg -> .m4b
 
 This is a thin frontend over book2audio.pipeline.convert -- the GUI
 (book2audio.gui) calls the exact same functions. No conversion logic lives
@@ -27,7 +27,7 @@ from book2audio.pipeline.convert import (
     plan_conversion,
     run_conversion,
 )
-from book2audio.processing.ai_review import AiReviewError
+from book2audio.processing.narration_cleanup import NarrationCleanupError
 from book2audio.tts.factory import TTS_BACKENDS
 from book2audio.tts.provider import ModelMissingError
 
@@ -53,10 +53,11 @@ def convert(
     allow_download: bool = typer.Option(False, "--allow-download/--no-allow-download", help="Allow downloading a missing model during conversion (default: off -- run `book2audio setup-models` instead)."),
     bitrate: str = typer.Option("64k", "--bitrate", help="AAC bitrate for the output .m4b."),
     pages: Optional[str] = typer.Option(None, "--pages", help='PDF only. e.g. "1-10,15,20-25" (1-indexed, inclusive). Omit for the whole document.'),
-    ai_review: bool = typer.Option(False, "--ai-review/--no-ai-review", help="Run extracted text through a local Ollama vision model to fix OCR errors before narration. Off by default; requires Ollama running locally."),
-    ai_review_model: str = typer.Option("qwen3-vl:4b-instruct", "--ai-review-model", help="Vision-capable Ollama model to use for --ai-review (compares OCR text against the page image)."),
-    save_text_outputs: bool = typer.Option(True, "--save-text-outputs/--no-save-text-outputs", help="Write <output>.raw.md / .cleaned.md / .reviewed.md alongside the .m4b."),
-    extract_only: bool = typer.Option(False, "--extract-only", help="Extract, clean, (optionally) review, and save readable Markdown -- skip TTS/assembly entirely."),
+    narration_cleanup: bool = typer.Option(False, "--narration-cleanup/--no-narration-cleanup", help="Conservative, text-only OCR cleanup via a local Ollama model before narration (fixes broken words, garbage digit strings, duplicated fragments -- never rewrites or paraphrases). Off by default; requires Ollama running locally. No image is ever sent."),
+    narration_cleanup_model: str = typer.Option("qwen3-vl:4b-instruct", "--narration-cleanup-model", help="Ollama model to use for --narration-cleanup."),
+    debug_narration_cleanup: bool = typer.Option(False, "--debug-narration-cleanup", help="Retain full per-chunk cleanup input/output for diagnosing mistakes (cache_dir/narration_cleanup_debug.json). Off by default to avoid clutter."),
+    save_text_outputs: bool = typer.Option(True, "--save-text-outputs/--no-save-text-outputs", help="Write <output>.raw.md / .cleaned.md / .narration.md alongside the .m4b."),
+    extract_only: bool = typer.Option(False, "--extract-only", help="Extract, clean, (optionally) run narration cleanup, and save readable Markdown -- skip TTS/assembly entirely."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Pure preview: report chapter/chunk counts, don't synthesize, don't save text files. For the latter, use --extract-only instead."),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
@@ -84,8 +85,9 @@ def convert(
         allow_download=allow_download,
         bitrate=bitrate,
         page_range=pages,
-        ai_review=ai_review,
-        ai_review_model=ai_review_model,
+        narration_cleanup=narration_cleanup,
+        narration_cleanup_model=narration_cleanup_model,
+        debug_narration_cleanup=debug_narration_cleanup,
         save_text_outputs=save_text_outputs,
         extract_only=extract_only,
     )
@@ -101,26 +103,21 @@ def convert(
     console.print(f"[bold]Extracting[/bold] {input_path} ...")
 
     def on_plan_progress(event: ProgressEvent) -> None:
-        if event.stage == "ai_review" and event.page_total:
-            console.print(f"[bold]AI review[/bold] (vision model vs. page image) page {event.page_index}/{event.page_total}")
+        if event.stage == "narration_cleanup" and event.page_total:
+            console.print(f"[bold]Narration cleanup[/bold] (local, text-only) chunk {event.page_index}/{event.page_total}")
         if event.stage == "extracting" and event.message:
             console.print(event.message)
 
     try:
         plan, chapter_chunks = plan_conversion(request, on_progress=on_plan_progress)
-    except (ValueError, ExtractionError, PageRangeError, AiReviewError) as e:
+    except (ValueError, ExtractionError, PageRangeError, NarrationCleanupError) as e:
         raise typer.BadParameter(str(e)) from e
 
     if plan.extraction_reused_cache:
         console.print("[cyan]Reused cached extraction[/cyan] (input and settings unchanged since last run).")
 
-    if ai_review:
-        if plan.ai_review_applied:
-            console.print(f"[bold]AI review[/bold] complete, {len(plan.review_flags)} passage(s) flagged as uncertain.")
-            for flag in plan.review_flags:
-                console.print(f"  [yellow]! {flag}[/yellow]")
-        elif plan.ai_review_skip_reason:
-            console.print(f"[yellow]AI review skipped:[/yellow] {plan.ai_review_skip_reason}")
+    if narration_cleanup and plan.narration_cleanup_applied:
+        console.print("[bold]Narration cleanup complete[/bold] (local, text-only -- no image was analyzed).")
 
     if plan.text_outputs_saved:
         console.print(f"[bold]Saved readable text:[/bold] {', '.join(p.name for p in plan.text_outputs_saved)}")

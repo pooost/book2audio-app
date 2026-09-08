@@ -1,13 +1,19 @@
-"""PROCESSING: OCR mode, chapter detection, offline mode, optional AI review.
+"""PROCESSING: OCR mode, chapter detection, offline mode, optional narration
+cleanup.
 
 Deliberately does NOT include footnote/table/figure-caption toggles: the
 backend has no such controls (footnote-marker stripping in
 processing/clean.py is unconditional, and there is no table extraction at
 all) -- exposing switches for either would be a GUI setting that does
 nothing, which the spec for this app explicitly rules out.
+
+The narration-cleanup control is deliberately NOT framed as "visual OCR
+verification" or anything image-related -- it's a local, text-only
+cleanup pass (processing/narration_cleanup.py). No page image is ever
+sent anywhere.
 """
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLineEdit, QWidget
+from PySide6.QtWidgets import QComboBox, QFormLayout, QCheckBox, QLabel, QLineEdit, QWidget
 
 
 class ProcessingSettingsWidget(QWidget):
@@ -30,22 +36,27 @@ class ProcessingSettingsWidget(QWidget):
         self.offline_check.setChecked(True)
         layout.addRow("", self.offline_check)
 
-        self.save_text_check = QCheckBox("Save readable text files (.raw.md / .cleaned.md / .reviewed.md)")
+        self.save_text_check = QCheckBox("Save readable text files (.raw.md / .cleaned.md / .narration.md)")
         self.save_text_check.setChecked(True)
         layout.addRow("", self.save_text_check)
 
-        self.ai_review_check = QCheckBox("AI review: compare OCR text against each page image with a local vision model")
-        self.ai_review_check.setChecked(False)
-        self.ai_review_check.toggled.connect(self._on_ai_review_toggled)
-        layout.addRow("", self.ai_review_check)
+        self.cleanup_combo = QComboBox()
+        self.cleanup_combo.addItem("Off", userData="off")
+        self.cleanup_combo.addItem("Conservative", userData="conservative")
+        self.cleanup_combo.setCurrentIndex(0)
+        self.cleanup_combo.currentIndexChanged.connect(self._on_cleanup_level_changed)
+        layout.addRow("Qwen Cleanup:", self.cleanup_combo)
 
-        self.ai_review_model_edit = QLineEdit("qwen3-vl:4b-instruct")
-        self.ai_review_model_edit.setEnabled(False)
-        self.ai_review_model_edit.setPlaceholderText("Must be a vision-capable Ollama model")
-        layout.addRow("Ollama model:", self.ai_review_model_edit)
+        self.cleanup_hint = QLabel("Local • Text only — no page images are analyzed")
+        self.cleanup_hint.setStyleSheet("QLabel { color: palette(mid); }")
+        layout.addRow("", self.cleanup_hint)
 
-    def _on_ai_review_toggled(self, checked: bool) -> None:
-        self.ai_review_model_edit.setEnabled(checked)
+        self.cleanup_model_edit = QLineEdit("qwen3-vl:4b-instruct")
+        self.cleanup_model_edit.setEnabled(False)
+        layout.addRow("Ollama model:", self.cleanup_model_edit)
+
+    def _on_cleanup_level_changed(self, _index: int) -> None:
+        self.cleanup_model_edit.setEnabled(self.cleanup_combo.currentData() != "off")
 
     def ocr_mode(self) -> str:
         return self.ocr_mode_combo.currentData()
@@ -59,8 +70,8 @@ class ProcessingSettingsWidget(QWidget):
     def save_text_outputs(self) -> bool:
         return self.save_text_check.isChecked()
 
-    def ai_review(self) -> bool:
-        return self.ai_review_check.isChecked()
+    def narration_cleanup(self) -> bool:
+        return self.cleanup_combo.currentData() != "off"
 
-    def ai_review_model(self) -> str:
-        return self.ai_review_model_edit.text().strip() or "qwen3-vl:4b-instruct"
+    def narration_cleanup_model(self) -> str:
+        return self.cleanup_model_edit.text().strip() or "qwen3-vl:4b-instruct"

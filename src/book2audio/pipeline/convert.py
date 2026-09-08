@@ -35,9 +35,10 @@ class ConversionRequest:
     allow_download: bool = False
     bitrate: str = "64k"
     page_range: str | None = None  # e.g. "1-10,15,20-25" (1-indexed, inclusive); PDF only
-    ai_review: bool = False  # off by default -- see processing/ai_review.py
-    ai_review_model: str = "qwen3-vl:4b-instruct"  # must be a vision-capable model
-    save_text_outputs: bool = True  # write <stem>.raw/cleaned/reviewed.md next to the .m4b
+    narration_cleanup: bool = False  # off by default -- see processing/narration_cleanup.py
+    narration_cleanup_model: str = "qwen3-vl:4b-instruct"  # text-only; despite the model name, no image is ever sent
+    debug_narration_cleanup: bool = False  # retain full per-chunk input/output audit (not written unless requested)
+    save_text_outputs: bool = True  # write <stem>.raw/cleaned/narration.md next to the .m4b
     extract_only: bool = False  # extract + save text, skip TTS entirely
 
     def resolved_cache_dir(self) -> Path:
@@ -47,7 +48,7 @@ class ConversionRequest:
         return self.title or self.input_path.stem
 
     def text_output_path(self, suffix: str) -> Path:
-        """suffix e.g. 'raw.md', 'cleaned.md', 'reviewed.md', 'extract_meta.json'."""
+        """suffix e.g. 'raw.md', 'cleaned.md', 'narration.md', 'extract_meta.json'."""
         return self.output_path.with_name(f"{self.output_path.stem}.{suffix}")
 
 
@@ -69,7 +70,7 @@ def _sanitize_page_range(page_range: str) -> str:
 
 @dataclass
 class ProgressEvent:
-    stage: str  # extracting | ocr | cleaning | chapter_detection | ai_review | tts | assembling | finished
+    stage: str  # extracting | cleaning | chapter_detection | narration_cleanup | tts | assembling | finished
     message: str = ""
     chapter_index: int = 0
     chapter_total: int = 0
@@ -114,9 +115,7 @@ class ConversionPlan:
     chunks_per_chapter: list[int] = field(default_factory=list)
     total_chunks: int = 0
     total_chars: int = 0
-    review_flags: list[str] = field(default_factory=list)
-    ai_review_applied: bool = False
-    ai_review_skip_reason: str | None = None
+    narration_cleanup_applied: bool = False
     text_outputs_saved: list[Path] = field(default_factory=list)
     extraction_reused_cache: bool = False
 
@@ -136,18 +135,18 @@ def _extraction_recipe(request: ConversionRequest) -> dict:
         "input_mtime": st.st_mtime,
         "input_size": st.st_size,
         "ocr_mode": request.ocr_mode,
-        "ai_review": request.ai_review,
-        "ai_review_model": request.ai_review_model if request.ai_review else None,
+        "narration_cleanup": request.narration_cleanup,
+        "narration_cleanup_model": request.narration_cleanup_model if request.narration_cleanup else None,
         "page_range": request.page_range,
     }
 
 
 def _load_cached_extraction(request: ConversionRequest):
-    """Reuse a prior extraction (raw/cleaned/reviewed .md + its recipe
+    """Reuse a prior extraction (raw/cleaned/narration .md + its recipe
     fingerprint) if the request matches exactly and the files are still
-    there -- extraction (especially OCR + AI review) is expensive and a
-    re-run (e.g. --extract-only twice, or extract-only then a full run)
-    shouldn't redo it."""
+    there -- extraction (especially OCR + narration cleanup) is expensive
+    and a re-run (e.g. --extract-only twice, or extract-only then a full
+    run) shouldn't redo it."""
     from book2audio.ingest.extract import ExtractResult
 
     meta_path = request.resolved_cache_dir() / "extraction_meta.json"
@@ -162,19 +161,17 @@ def _load_cached_extraction(request: ConversionRequest):
 
     raw_path = request.text_output_path("raw.md")
     cleaned_path = request.text_output_path("cleaned.md")
-    reviewed_path = request.text_output_path("reviewed.md")
+    narration_path = request.text_output_path("narration.md")
     if not raw_path.exists() or not cleaned_path.exists():
         return None
-    if request.ai_review and not reviewed_path.exists():
+    if request.narration_cleanup and not narration_path.exists():
         return None
 
     return ExtractResult(
         raw_text=raw_path.read_text(encoding="utf-8"),
         cleaned_text=cleaned_path.read_text(encoding="utf-8"),
-        reviewed_text=reviewed_path.read_text(encoding="utf-8") if reviewed_path.exists() else None,
-        review_flags=meta.get("review_flags", []),
-        ai_review_applied=meta.get("ai_review_applied", False),
-        ai_review_skip_reason=meta.get("ai_review_skip_reason"),
+        narration_text=narration_path.read_text(encoding="utf-8") if narration_path.exists() else None,
+        narration_cleanup_applied=meta.get("narration_cleanup_applied", False),
     )
 
 
@@ -189,18 +186,27 @@ def _save_extraction(request: ConversionRequest, extracted) -> list[Path]:
 
     write("raw.md", extracted.raw_text)
     write("cleaned.md", extracted.cleaned_text)
-    if extracted.reviewed_text is not None:
-        write("reviewed.md", extracted.reviewed_text)
+    if extracted.narration_text is not None:
+        write("narration.md", extracted.narration_text)
 
     cache_dir = request.resolved_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     meta = {
         "recipe": _extraction_recipe(request),
-        "review_flags": extracted.review_flags,
-        "ai_review_applied": extracted.ai_review_applied,
-        "ai_review_skip_reason": extracted.ai_review_skip_reason,
+        "narration_cleanup_applied": extracted.narration_cleanup_applied,
     }
     (cache_dir / "extraction_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    # Only written when --debug-narration-cleanup was passed (extracted.
+    # cleanup_audit is empty otherwise) -- keeps the normal cache dir free
+    # of per-chunk debug clutter.
+    if extracted.cleanup_audit:
+        audit_data = [
+            {"chunk_index": e.chunk_index, "input": e.input_text, "output": e.output_text,
+             "model": e.model, "status": e.status}
+            for e in extracted.cleanup_audit
+        ]
+        (cache_dir / "narration_cleanup_debug.json").write_text(json.dumps(audit_data, indent=2), encoding="utf-8")
 
     return saved
 
@@ -222,7 +228,7 @@ def plan_conversion(
     reused_cache = extracted is not None
 
     if extracted is None:
-        from book2audio.ingest.extract import extract_with_review
+        from book2audio.ingest.extract import extract_and_clean
 
         effective_input = request.input_path
         if request.page_range and request.input_path.suffix.lower() == ".pdf":
@@ -233,17 +239,18 @@ def plan_conversion(
             extract_page_subset(request.input_path, request.page_range, subset_path)
             effective_input = subset_path
 
-        def on_page_progress(i: int, total: int) -> None:
-            report(ProgressEvent(stage="ai_review", page_index=i, page_total=total))
+        def on_cleanup_progress(i: int, total: int) -> None:
+            report(ProgressEvent(stage="narration_cleanup", page_index=i, page_total=total))
 
-        extracted = extract_with_review(
+        extracted = extract_and_clean(
             effective_input,
             ocr_output_dir=request.resolved_cache_dir() / "ocr",
             ocr_mode=request.ocr_mode,
             allow_download=request.allow_download,
-            ai_review=request.ai_review,
-            ai_review_model=request.ai_review_model,
-            on_page_progress=on_page_progress,
+            narration_cleanup=request.narration_cleanup,
+            narration_cleanup_model=request.narration_cleanup_model,
+            on_cleanup_progress=on_cleanup_progress,
+            debug_cleanup=request.debug_narration_cleanup,
         )
     else:
         report(ProgressEvent(stage="extracting", message="Reusing cached extraction (recipe unchanged)."))
@@ -262,9 +269,7 @@ def plan_conversion(
 
     chapter_chunks = [(ch.title, chunk_text(ch.text, max_chars=request.max_chars)) for ch in chapters]
     plan = _summarize(chapter_chunks)
-    plan.review_flags = extracted.review_flags
-    plan.ai_review_applied = extracted.ai_review_applied
-    plan.ai_review_skip_reason = extracted.ai_review_skip_reason
+    plan.narration_cleanup_applied = extracted.narration_cleanup_applied
     plan.text_outputs_saved = saved_paths
     plan.extraction_reused_cache = reused_cache
     return plan, chapter_chunks

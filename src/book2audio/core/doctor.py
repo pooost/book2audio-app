@@ -44,7 +44,7 @@ def run_doctor() -> DoctorReport:
     checks.append(_bin_check("FFmpeg", shutil.which("ffmpeg")))
     checks.append(_bin_check("FFprobe", shutil.which("ffprobe")))
 
-    # TEXT (extraction + review)
+    # TEXT (extraction + narration cleanup)
     checks.append(_markitdown_check())
     checks += _openocr_checks()
     checks.append(_ollama_check())
@@ -129,17 +129,18 @@ def _openocr_checks() -> list[CheckResult]:
 
 
 def _ollama_check() -> CheckResult:
-    from book2audio.processing.ai_review import DEFAULT_MODEL, available_models, is_ollama_available
+    from book2audio.processing.narration_cleanup import DEFAULT_MODEL, available_models, is_ollama_available
 
+    name = "Qwen / Ollama (optional, for --narration-cleanup)"
     if not is_ollama_available():
-        return CheckResult("Qwen / Ollama (optional, for --ai-review)", False, "not running -- only needed if you use --ai-review", category="text", optional=True)
+        return CheckResult(name, False, "not running -- only needed if you use --narration-cleanup", category="text", optional=True)
 
     models = available_models()
     has_default = DEFAULT_MODEL in models
     if has_default:
-        detail = f"running, {DEFAULT_MODEL} ready"
+        detail = f"running, {DEFAULT_MODEL} ready (text-only cleanup)"
     elif models:
         detail = f"running, but {DEFAULT_MODEL} not pulled (have: {', '.join(models)}) -- run `ollama pull {DEFAULT_MODEL}`"
     else:
         detail = f"running, but no models pulled yet -- run `ollama pull {DEFAULT_MODEL}`"
-    return CheckResult("Qwen / Ollama (optional, for --ai-review)", has_default, detail, category="text", optional=True)
+    return CheckResult(name, has_default, detail, category="text", optional=True)

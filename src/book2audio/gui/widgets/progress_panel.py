@@ -17,7 +17,7 @@ STAGE_LABELS = {
     "ocr": "Running OCR",
     "cleaning": "Cleaning text",
     "chapter_detection": "Detecting chapters",
-    "ai_review": "AI review (local model)",
+    "narration_cleanup": "Narration cleanup (local, text-only)",
     "tts": "Narrating",
     "assembling": "Assembling .m4b",
     "finished": "Finished",
@@ -77,7 +77,10 @@ class ProgressPanel(QWidget):
             self.bar.setRange(0, event.chunk_total)
             self.bar.setValue(event.chunk_index)
         if event.page_total:
-            self.chunk_label.setText(f"Page {event.page_index} / {event.page_total}")
+            # page_index/page_total are reused here for narration-cleanup
+            # chunk progress (text chunks, not page images -- the field
+            # names predate the switch away from per-page image review).
+            self.chunk_label.setText(f"Cleanup chunk {event.page_index} / {event.page_total}")
             self.bar.setRange(0, event.page_total)
             self.bar.setValue(event.page_index)
 
