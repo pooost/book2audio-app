@@ -7,7 +7,6 @@ can't drift.
 
 import os
 import platform
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -41,8 +40,10 @@ def run_doctor() -> DoctorReport:
     checks.append(CheckResult("Operating system", True, f"{platform.system()} {platform.release()} ({platform.machine()})"))
     checks.append(CheckResult("Python", True, sys.version.split()[0]))
     checks.append(_device_check())
-    checks.append(_bin_check("FFmpeg", shutil.which("ffmpeg")))
-    checks.append(_bin_check("FFprobe", shutil.which("ffprobe")))
+    from book2audio.core.ffmpeg_locate import find_ffmpeg, find_ffprobe
+
+    checks.append(_bin_check("FFmpeg", find_ffmpeg()))
+    checks.append(_bin_check("FFprobe", find_ffprobe()))
 
     # TEXT (extraction + narration cleanup)
     checks.append(_markitdown_check())

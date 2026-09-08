@@ -81,8 +81,19 @@ def download_model(voices: list[str] | None = None) -> None:
         hf_constants.HF_HUB_OFFLINE = previous
 
     if not is_spacy_model_installed():
-        import subprocess
         import sys
+
+        if getattr(sys, "frozen", False):
+            # A packaged build ships en_core_web_sm as a normal bundled
+            # dependency (see pyproject.toml) -- this should be unreachable
+            # there. sys.executable in a frozen build is the app itself, not
+            # a real Python interpreter, so `sys.executable -m spacy download`
+            # below can't work here the way it does for a source install.
+            raise RuntimeError(
+                f"{SPACY_MODEL} is missing from this packaged build. This shouldn't "
+                "happen -- please report it."
+            )
+        import subprocess
 
         subprocess.run([sys.executable, "-m", "spacy", "download", SPACY_MODEL], check=True)
 

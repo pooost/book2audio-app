@@ -55,4 +55,27 @@ class ConversionWorker(QThread):
             self.failed.emit(f"{type(e).__name__}: {e}", None)
 
 
-__all__ = ["ConversionWorker", "ProgressEvent"]
+class ModelSetupWorker(QThread):
+    """Runs core.models.setup_models() on a background thread so the GUI
+    doesn't freeze during multi-GB downloads. Lets a friend who doesn't use
+    a terminal get set up entirely from the app."""
+
+    progress = Signal(str)  # human-readable status line
+    finished_ok = Signal()
+    failed = Signal(str)
+
+    def __init__(self, tts: str, parent=None):
+        super().__init__(parent)
+        self.tts = tts
+
+    def run(self) -> None:
+        from book2audio.core.models import setup_models
+
+        try:
+            setup_models(progress=lambda msg: self.progress.emit(msg), tts=self.tts)
+            self.finished_ok.emit()
+        except Exception as e:  # noqa: BLE001 -- surface anything to the UI, never crash silently
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+__all__ = ["ConversionWorker", "ModelSetupWorker", "ProgressEvent"]

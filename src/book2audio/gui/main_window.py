@@ -137,23 +137,27 @@ class MainWindow(QMainWindow):
             from book2audio.tts.kokoro_backend import is_model_cached as kokoro_cached
 
             if not kokoro_cached(self.voice_settings.kokoro_voice()):
-                QMessageBox.warning(
-                    self, "Kokoro not set up",
+                if not self._offer_model_download(
+                    "Kokoro not set up",
                     f"Kokoro voice {self.voice_settings.kokoro_voice()!r} (or the core model) isn't "
-                    "downloaded yet.\n\nRun `book2audio setup-models --tts kokoro` in a terminal, "
-                    "then try again.",
-                )
-                return None
+                    "downloaded yet.",
+                    tts="kokoro",
+                ):
+                    return None
+                if not kokoro_cached(self.voice_settings.kokoro_voice()):
+                    return None
         elif backend == "chatterbox":
             from book2audio.tts.chatterbox_backend import is_model_cached as chatterbox_cached
 
             if not chatterbox_cached():
-                QMessageBox.warning(
-                    self, "Chatterbox not set up",
-                    "Chatterbox model files aren't downloaded yet.\n\n"
-                    "Run `book2audio setup-models` in a terminal, then try again.",
-                )
-                return None
+                if not self._offer_model_download(
+                    "Chatterbox not set up",
+                    "Chatterbox model files aren't downloaded yet.",
+                    tts="chatterbox",
+                ):
+                    return None
+                if not chatterbox_cached():
+                    return None
 
         output_path = self.output_settings.output_path(input_path, page_range)
 
@@ -179,6 +183,22 @@ class MainWindow(QMainWindow):
             save_text_outputs=self.processing_settings.save_text_outputs(),
             debug_narration_cleanup=self.advanced_panel.debug_narration_cleanup(),
         )
+
+    def _offer_model_download(self, title: str, detail: str, tts: str) -> bool:
+        """Ask before opening the (blocking, modal) download dialog rather
+        than downloading silently. Returns True if the dialog was shown
+        (regardless of whether the download actually succeeded -- the
+        caller re-checks is_model_cached() itself either way)."""
+        from book2audio.gui.dialogs.model_setup_dialog import ModelSetupDialog
+
+        choice = QMessageBox.question(
+            self, title, f"{detail}\n\nDownload it now? This needs an internet connection "
+            "and may take a while (one-time only -- fully offline afterward).",
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return False
+        ModelSetupDialog(tts=tts, parent=self).exec()
+        return True
 
     def _start_conversion(self) -> None:
         request = self._build_request()

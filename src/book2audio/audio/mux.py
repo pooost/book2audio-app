@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from book2audio.core.ffmpeg_locate import find_ffmpeg, find_ffprobe
+
 
 class MuxError(Exception):
     pass
@@ -14,6 +16,11 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
         return subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         raise MuxError(f"{cmd[0]} failed:\n{e.stderr}") from e
+    except FileNotFoundError as e:
+        raise MuxError(
+            f"{cmd[0]} not found. It should be bundled with this app; if you're running "
+            "from source, install ffmpeg and make sure it's on PATH."
+        ) from e
 
 
 def concat_wavs(wav_paths: list[Path], out_path: Path) -> None:
@@ -29,13 +36,15 @@ def concat_wavs(wav_paths: list[Path], out_path: Path) -> None:
         list_path = Path(f.name)
 
     try:
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(out_path)])
+        ffmpeg = find_ffmpeg() or "ffmpeg"
+        _run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(out_path)])
     finally:
         list_path.unlink(missing_ok=True)
 
 
 def get_duration_seconds(path: Path) -> float:
-    result = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)])
+    ffprobe = find_ffprobe() or "ffprobe"
+    result = _run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)])
     return float(result.stdout.strip())
 
 
@@ -78,8 +87,9 @@ def build_m4b(
         metadata_path.write_text("\n".join(lines), encoding="utf-8")
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        ffmpeg = find_ffmpeg() or "ffmpeg"
         _run([
-            "ffmpeg", "-y",
+            ffmpeg, "-y",
             "-i", str(master_wav),
             "-i", str(metadata_path),
             "-map_metadata", "1",

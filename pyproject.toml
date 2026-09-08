@@ -17,6 +17,12 @@ dependencies = [
     "mutagen",
     "pillow",
     "kokoro",  # fast/lightweight local TTS backend, alongside chatterbox-tts
+    # Pinned to match spacy's installed minor version (3.8.x). A normal pip
+    # dependency (not a runtime `spacy download` subprocess call) so a
+    # PyInstaller-frozen build has it bundled at build time -- `sys.executable
+    # -m spacy download ...` can't work inside a frozen exe, since sys.executable
+    # is the frozen app itself, not a real Python interpreter.
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "typer",
     "rich",
     "PySide6",

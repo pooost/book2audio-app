@@ -1,8 +1,12 @@
-"""System / Diagnostics screen. Read-only -- never downloads anything."""
+"""System / Diagnostics screen. The checks themselves are read-only; the
+"Download Missing Models" button is the one place this screen can trigger a
+download, and only on explicit click -- nothing here contacts the internet
+on its own."""
 
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -29,15 +33,28 @@ class DoctorDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table)
 
+        button_row = QHBoxLayout()
         rerun_button = QPushButton("Run Diagnostics")
         rerun_button.clicked.connect(self.run_diagnostics)
-        layout.addWidget(rerun_button)
+        button_row.addWidget(rerun_button)
+
+        self.download_button = QPushButton("Download Missing Models...")
+        self.download_button.clicked.connect(self._open_model_setup)
+        self.download_button.setVisible(False)
+        button_row.addWidget(self.download_button)
+        layout.addLayout(button_row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
+        self.run_diagnostics()
+
+    def _open_model_setup(self) -> None:
+        from book2audio.gui.dialogs.model_setup_dialog import ModelSetupDialog
+
+        ModelSetupDialog(tts="all", parent=self).exec()
         self.run_diagnostics()
 
     def run_diagnostics(self) -> None:
@@ -72,12 +89,22 @@ class DoctorDialog(QDialog):
 
         self.table.resizeColumnsToContents()
 
+        # Only Chatterbox/Kokoro/OpenOCR are things this dialog can fetch --
+        # a missing FFmpeg or an unavailable device is a system-level issue
+        # setup_models() can't do anything about, so the button only shows
+        # up when it would actually help.
+        downloadable_names = {"Chatterbox Multilingual V3", "Kokoro", "OpenOCR models"}
+        missing = [c.name for c in report.checks if not c.ok and not c.optional]
+        missing_downloadable = [n for n in missing if n in downloadable_names]
+        self.download_button.setVisible(bool(missing_downloadable))
+
         if report.all_ok:
             self.summary_label.setText("All checks passed.")
+        elif missing_downloadable:
+            self.summary_label.setText("Missing: " + ", ".join(missing) + ".")
         else:
-            missing = [c.name for c in report.checks if not c.ok and not c.optional]
             self.summary_label.setText(
-                "Missing: " + ", ".join(missing) + ". Run `book2audio setup-models` in a terminal if a model is missing."
+                "Missing: " + ", ".join(missing) + " -- not something this app can download for you."
             )
 
 

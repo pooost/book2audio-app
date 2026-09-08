@@ -1,0 +1,120 @@
+name: Build Book2Audio
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "run_gui.py"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project (CPU torch pulled in transitively for now)
+        run: uv pip install --system -e .
+
+      - name: Swap in CUDA-enabled torch
+        # Friends' Windows machines have NVIDIA GPUs -- cu124 is a broadly
+        # compatible recent stable CUDA build (needs driver 550+). If a
+        # friend's driver is older/there's no NVIDIA GPU at all, book2audio's
+        # own device auto-detection (core/device.py) just falls back to CPU
+        # at runtime rather than crashing -- this only affects whether GPU
+        # acceleration is available, not whether the app works.
+        run: uv pip install --system --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch torchaudio
+
+      - name: Install PyInstaller
+        run: uv pip install --system pyinstaller
+
+      - name: Fetch static ffmpeg/ffprobe (BtbN win64 static build)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
+          New-Item -ItemType Directory -Force -Path ffmpeg-bin | Out-Null
+          $ff = Get-ChildItem -Path ffmpeg_extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $fp = Get-ChildItem -Path ffmpeg_extracted -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          Copy-Item $ff.FullName ffmpeg-bin\ffmpeg.exe
+          Copy-Item $fp.FullName ffmpeg-bin\ffprobe.exe
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/book2audio.spec --noconfirm
+
+      - name: Bundle ffmpeg + friend README into the build
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse ffmpeg-bin dist\Book2Audio\ffmpeg-bin
+          Copy-Item packaging\FRIEND_README.txt dist\Book2Audio\README.txt
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\Book2Audio -DestinationPath Book2Audio-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Book2Audio-Windows
+          path: Book2Audio-Windows.zip
+          retention-days: 14
+
+  build-macos:
+    runs-on: macos-14 # Apple Silicon (arm64) -- default torch wheels include MPS support, no special index needed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project
+        run: uv pip install --system -e .
+
+      - name: Install PyInstaller
+        run: uv pip install --system pyinstaller
+
+      - name: Bundle a self-contained ffmpeg/ffprobe (Homebrew + dylibbundler)
+        # Homebrew's ffmpeg is dynamically linked against other Homebrew
+        # libraries -- copying just the binary would break on a friend's Mac
+        # that doesn't have Homebrew. dylibbundler rewrites the binary's
+        # library paths to point at bundled copies instead, so the pair is
+        # self-contained.
+        run: |
+          brew install ffmpeg dylibbundler
+          mkdir -p ffmpeg-bin
+          cp "$(command -v ffmpeg)" ffmpeg-bin/ffmpeg
+          cp "$(command -v ffprobe)" ffmpeg-bin/ffprobe
+          chmod +w ffmpeg-bin/ffmpeg ffmpeg-bin/ffprobe
+          dylibbundler -od -b -x ffmpeg-bin/ffmpeg -d ffmpeg-bin/libs -p @executable_path/libs/
+          dylibbundler -od -b -x ffmpeg-bin/ffprobe -d ffmpeg-bin/libs -p @executable_path/libs/
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/book2audio.spec --noconfirm
+
+      - name: Bundle ffmpeg + friend README into the .app
+        run: |
+          cp -R ffmpeg-bin "dist/Book2Audio.app/Contents/MacOS/ffmpeg-bin"
+          cp packaging/FRIEND_README.txt "dist/Book2Audio.app/Contents/MacOS/README.txt"
+
+      - name: Zip (ditto preserves the .app bundle structure correctly, unlike plain zip)
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Book2Audio.app Book2Audio-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Book2Audio-macOS
+          path: Book2Audio-macOS.zip
+          retention-days: 14
