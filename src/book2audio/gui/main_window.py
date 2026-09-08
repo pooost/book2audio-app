@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self.resize(560, 780)
 
         self._worker: ConversionWorker | None = None
+        self._last_plan = None
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -144,12 +145,17 @@ class MainWindow(QMainWindow):
         self._set_running(True)
         self.progress_panel.start()
 
+        self._last_plan = None
         self._worker = ConversionWorker(request)
         self._worker.progress.connect(self.progress_panel.update_from_event)
+        self._worker.plan_ready.connect(self._on_plan_ready)
         self._worker.finished_ok.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
         self._worker.start()
+
+    def _on_plan_ready(self, plan) -> None:
+        self._last_plan = plan
 
     def _cancel_conversion(self) -> None:
         if self._worker is not None:
@@ -176,7 +182,14 @@ class MainWindow(QMainWindow):
     def _on_finished(self, output_path: str) -> None:
         self._set_running(False)
         self.progress_panel.stop()
-        QMessageBox.information(self, "Done", f"Audiobook saved to:\n{output_path}")
+
+        message = f"Audiobook saved to:\n{output_path}"
+        if self._last_plan is not None and self._last_plan.review_flags:
+            flags = self._last_plan.review_flags
+            preview = "\n".join(f"- {f}" for f in flags[:10])
+            more = f"\n(+{len(flags) - 10} more)" if len(flags) > 10 else ""
+            message += f"\n\nAI review flagged {len(flags)} uncertain passage(s):\n{preview}{more}"
+        QMessageBox.information(self, "Done", message)
 
     def _on_failed(self, message: str, failure) -> None:
         self._set_running(False)

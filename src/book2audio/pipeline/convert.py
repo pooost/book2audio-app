@@ -29,7 +29,7 @@ class ConversionRequest:
     bitrate: str = "64k"
     page_range: str | None = None  # e.g. "1-10,15,20-25" (1-indexed, inclusive); PDF only
     ai_review: bool = False  # off by default -- see processing/ai_review.py
-    ai_review_model: str = "llama3.2"
+    ai_review_model: str = "qwen3-vl:4b-instruct"  # must be a vision-capable model
 
     def resolved_cache_dir(self) -> Path:
         return self.cache_dir or self.output_path.with_name(self.output_path.stem + "_cache")
@@ -46,6 +46,8 @@ class ProgressEvent:
     chapter_total: int = 0
     chunk_index: int = 0
     chunk_total: int = 0
+    page_index: int = 0
+    page_total: int = 0
     device: str | None = None
 
 
@@ -78,6 +80,9 @@ class ConversionPlan:
     chunks_per_chapter: list[int] = field(default_factory=list)
     total_chunks: int = 0
     total_chars: int = 0
+    review_flags: list[str] = field(default_factory=list)
+    ai_review_applied: bool = False
+    ai_review_skip_reason: str | None = None
 
 
 def _summarize(chapter_chunks: list[tuple[str, list[str]]]) -> ConversionPlan:
@@ -97,7 +102,7 @@ def plan_conversion(
     touching the GPU. Returns the plan summary plus the actual (title,
     chunks) pairs so a caller that wants to proceed doesn't have to redo
     this work (see run_conversion's chapter_chunks parameter)."""
-    from book2audio.ingest.extract import extract_markdown
+    from book2audio.ingest.extract import extract_with_review
     from book2audio.processing.chunker import chunk_text
     from book2audio.processing.clean import Chapter, clean_text, split_chapters
 
@@ -112,35 +117,34 @@ def plan_conversion(
         extract_page_subset(request.input_path, request.page_range, subset_path)
         effective_input = subset_path
 
-    raw = extract_markdown(
+    def on_page_progress(i: int, total: int) -> None:
+        report(ProgressEvent(stage="ai_review", page_index=i, page_total=total))
+
+    extracted = extract_with_review(
         effective_input,
         ocr_output_dir=request.resolved_cache_dir() / "ocr",
         ocr_mode=request.ocr_mode,
         allow_download=request.allow_download,
+        ai_review=request.ai_review,
+        ai_review_model=request.ai_review_model,
+        on_page_progress=on_page_progress,
     )
-    if not raw.strip():
+    if not extracted.text.strip():
         raise ValueError("No text could be extracted from the input.")
 
-    cleaned = clean_text(raw)
+    cleaned = clean_text(extracted.text)
 
     if request.preserve_chapters:
         chapters = split_chapters(cleaned)
     else:
         chapters = [Chapter(title=request.resolved_title(), text=cleaned)]
 
-    if request.ai_review:
-        from book2audio.processing.ai_review import review_text
-
-        reviewed = []
-        for i, ch in enumerate(chapters, start=1):
-            report(ProgressEvent(
-                stage="ai_review", chapter_index=i, chapter_total=len(chapters), message=ch.title,
-            ))
-            reviewed.append(Chapter(title=ch.title, text=review_text(ch.text, model=request.ai_review_model)))
-        chapters = reviewed
-
     chapter_chunks = [(ch.title, chunk_text(ch.text, max_chars=request.max_chars)) for ch in chapters]
-    return _summarize(chapter_chunks), chapter_chunks
+    plan = _summarize(chapter_chunks)
+    plan.review_flags = extracted.review_flags
+    plan.ai_review_applied = extracted.ai_review_applied
+    plan.ai_review_skip_reason = extracted.ai_review_skip_reason
+    return plan, chapter_chunks
 
 
 def run_conversion(

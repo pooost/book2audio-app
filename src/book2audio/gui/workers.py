@@ -14,12 +14,14 @@ from book2audio.pipeline.convert import (
     ConversionCancelled,
     ConversionRequest,
     ProgressEvent,
+    plan_conversion,
     run_conversion,
 )
 
 
 class ConversionWorker(QThread):
     progress = Signal(object)  # ProgressEvent
+    plan_ready = Signal(object)  # ConversionPlan -- includes AI-review flags/skip reason
     finished_ok = Signal(str)  # output path
     failed = Signal(str, object)  # message, ChunkFailure | None
     cancelled = Signal()
@@ -33,10 +35,15 @@ class ConversionWorker(QThread):
         self._cancel_event.set()
 
     def run(self) -> None:
+        on_progress = lambda e: self.progress.emit(e)  # noqa: E731
         try:
+            plan, chapter_chunks = plan_conversion(self.request, on_progress=on_progress)
+            self.plan_ready.emit(plan)
+
             output = run_conversion(
                 self.request,
-                on_progress=lambda e: self.progress.emit(e),
+                chapter_chunks=chapter_chunks,
+                on_progress=on_progress,
                 should_cancel=self._cancel_event.is_set,
             )
             self.finished_ok.emit(str(output))

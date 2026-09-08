@@ -48,7 +48,7 @@ def convert(
     bitrate: str = typer.Option("64k", "--bitrate", help="AAC bitrate for the output .m4b."),
     pages: Optional[str] = typer.Option(None, "--pages", help='PDF only. e.g. "1-10,15,20-25" (1-indexed, inclusive). Omit for the whole document.'),
     ai_review: bool = typer.Option(False, "--ai-review/--no-ai-review", help="Run extracted text through a local Ollama model to fix OCR errors before narration. Off by default; requires Ollama running locally."),
-    ai_review_model: str = typer.Option("llama3.2", "--ai-review-model", help="Ollama model name to use for --ai-review."),
+    ai_review_model: str = typer.Option("qwen3-vl:4b-instruct", "--ai-review-model", help="Vision-capable Ollama model to use for --ai-review (compares OCR text against the page image)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Extract, clean, and chunk only -- report counts, don't synthesize."),
 ):
     """Convert INPUT_PATH into a chaptered .m4b audiobook."""
@@ -77,13 +77,21 @@ def convert(
     console.print(f"[bold]Extracting[/bold] {input_path} ...")
 
     def on_plan_progress(event: ProgressEvent) -> None:
-        if event.stage == "ai_review":
-            console.print(f"[bold]AI review[/bold] chapter {event.chapter_index}/{event.chapter_total}: {event.message}")
+        if event.stage == "ai_review" and event.page_total:
+            console.print(f"[bold]AI review[/bold] (vision model vs. page image) page {event.page_index}/{event.page_total}")
 
     try:
         plan, chapter_chunks = plan_conversion(request, on_progress=on_plan_progress)
     except (ValueError, ExtractionError, PageRangeError, AiReviewError) as e:
         raise typer.BadParameter(str(e)) from e
+
+    if ai_review:
+        if plan.ai_review_applied:
+            console.print(f"[bold]AI review[/bold] complete, {len(plan.review_flags)} passage(s) flagged as uncertain.")
+            for flag in plan.review_flags:
+                console.print(f"  [yellow]! {flag}[/yellow]")
+        elif plan.ai_review_skip_reason:
+            console.print(f"[yellow]AI review skipped:[/yellow] {plan.ai_review_skip_reason}")
 
     console.print(f"[bold]{len(plan.chapter_titles)}[/bold] chapter(s), [bold]{plan.total_chunks}[/bold] chunk(s), [bold]{plan.total_chars:,}[/bold] characters.")
     for ch_title, count in zip(plan.chapter_titles, plan.chunks_per_chapter):

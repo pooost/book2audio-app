@@ -107,11 +107,17 @@ def _openocr_checks() -> list[CheckResult]:
 
 
 def _ollama_check() -> CheckResult:
-    from book2audio.processing.ai_review import is_ollama_available, available_models
+    from book2audio.processing.ai_review import DEFAULT_MODEL, available_models, is_ollama_available
 
-    available = is_ollama_available()
-    if not available:
+    if not is_ollama_available():
         return CheckResult("Ollama (optional, for --ai-review)", False, "not running -- only needed if you use --ai-review", optional=True)
+
     models = available_models()
-    detail = f"running, models: {', '.join(models)}" if models else "running, but no models pulled yet (`ollama pull llama3.2`)"
-    return CheckResult("Ollama (optional, for --ai-review)", bool(models), detail, optional=True)
+    has_default = DEFAULT_MODEL in models
+    if has_default:
+        detail = f"running, {DEFAULT_MODEL} ready"
+    elif models:
+        detail = f"running, but {DEFAULT_MODEL} not pulled (have: {', '.join(models)}) -- run `ollama pull {DEFAULT_MODEL}`"
+    else:
+        detail = f"running, but no models pulled yet -- run `ollama pull {DEFAULT_MODEL}`"
+    return CheckResult("Ollama (optional, for --ai-review)", has_default, detail, optional=True)

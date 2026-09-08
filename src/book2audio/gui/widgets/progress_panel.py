@@ -69,6 +69,10 @@ class ProgressPanel(QWidget):
             self.chunk_label.setText(f"Chunk {event.chunk_index} / {event.chunk_total}")
             self.bar.setRange(0, event.chunk_total)
             self.bar.setValue(event.chunk_index)
+        if event.page_total:
+            self.chunk_label.setText(f"Page {event.page_index} / {event.page_total}")
+            self.bar.setRange(0, event.page_total)
+            self.bar.setValue(event.page_index)
 
         details = []
         if event.device:

@@ -30,13 +30,14 @@ class ProcessingSettingsWidget(QWidget):
         self.offline_check.setChecked(True)
         layout.addRow("", self.offline_check)
 
-        self.ai_review_check = QCheckBox("AI review: fix OCR errors with a local model before narrating")
+        self.ai_review_check = QCheckBox("AI review: compare OCR text against each page image with a local vision model")
         self.ai_review_check.setChecked(False)
         self.ai_review_check.toggled.connect(self._on_ai_review_toggled)
         layout.addRow("", self.ai_review_check)
 
-        self.ai_review_model_edit = QLineEdit("llama3.2")
+        self.ai_review_model_edit = QLineEdit("qwen3-vl:4b-instruct")
         self.ai_review_model_edit.setEnabled(False)
+        self.ai_review_model_edit.setPlaceholderText("Must be a vision-capable Ollama model")
         layout.addRow("Ollama model:", self.ai_review_model_edit)
 
     def _on_ai_review_toggled(self, checked: bool) -> None:
@@ -55,4 +56,4 @@ class ProcessingSettingsWidget(QWidget):
         return self.ai_review_check.isChecked()
 
     def ai_review_model(self) -> str:
-        return self.ai_review_model_edit.text().strip() or "llama3.2"
+        return self.ai_review_model_edit.text().strip() or "qwen3-vl:4b-instruct"
