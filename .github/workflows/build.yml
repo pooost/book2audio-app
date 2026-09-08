@@ -59,6 +59,22 @@ jobs:
           Copy-Item -Recurse ffmpeg-bin dist\Book2Audio\ffmpeg-bin
           Copy-Item packaging\FRIEND_README.txt dist\Book2Audio\README.txt
 
+      - name: Smoke test -- launch the built exe and confirm it doesn't crash on startup
+        # Catches the most common PyInstaller failure mode (a missing hidden
+        # import/DLL that only surfaces at runtime, not at build time) before
+        # this ever reaches a friend. Not a full functional test, just "does
+        # it survive past Qt/torch module init without dying."
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\Book2Audio\Book2Audio.exe" -PassThru
+          Start-Sleep -Seconds 25
+          if ($proc.HasExited) {
+            Write-Host "FAILED: Book2Audio.exe exited early with code $($proc.ExitCode)"
+            exit 1
+          }
+          Write-Host "OK: Book2Audio.exe still running after 25s"
+          Stop-Process -Id $proc.Id -Force
+
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist\Book2Audio -DestinationPath Book2Audio-Windows.zip
@@ -109,6 +125,21 @@ jobs:
         run: |
           cp -R ffmpeg-bin "dist/Book2Audio.app/Contents/MacOS/ffmpeg-bin"
           cp packaging/FRIEND_README.txt "dist/Book2Audio.app/Contents/MacOS/README.txt"
+
+      - name: Smoke test -- launch the built app and confirm it doesn't crash on startup
+        # Same reasoning as the Windows job's smoke test step.
+        run: |
+          "dist/Book2Audio.app/Contents/MacOS/Book2Audio" &
+          APP_PID=$!
+          sleep 20
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "OK: Book2Audio still running after 20s"
+            kill $APP_PID
+          else
+            wait $APP_PID
+            echo "FAILED: Book2Audio exited early with code $?"
+            exit 1
+          fi
 
       - name: Zip (ditto preserves the .app bundle structure correctly, unlike plain zip)
         run: ditto -c -k --sequesterRsrc --keepParent dist/Book2Audio.app Book2Audio-macOS.zip
