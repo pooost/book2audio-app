@@ -1,20 +1,23 @@
 [project]
 name = "book2audio"
 version = "0.1.0"
-description = "Convert ebooks and text files to audio using TTS"
-requires-python = ">=3.9"
+description = "Convert books (PDF/EPUB/scans) to narrated .m4b audiobooks"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-    "edge-tts>=6.1.0",
-    "click>=8.1.0",
-    "pydub>=0.25.1",
-    "ebooklib>=0.18",
-    "beautifulsoup4>=4.12.0",
-    "pypdf>=4.0.0",
-    "audioop-lts; python_version >= '3.13'",
+    "markitdown[all]",
+    "openocr-python==0.1.5",
+    # PyPI's chatterbox-tts (0.1.7) doesn't yet expose t3_model="v3" -- that
+    # only exists on GitHub main. Track git until a release picks it up.
+    "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git",
+    "pymupdf",
+    "ebooklib",
+    "beautifulsoup4",
+    "lxml",
+    "soundfile",
+    "mutagen",
+    "typer",
+    "rich",
 ]
-
-[project.scripts]
-book2audio = "book2audio.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
