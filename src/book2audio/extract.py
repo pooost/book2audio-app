@@ -59,22 +59,24 @@ def _run_openocr(input_path: Path, output_dir: Path | None) -> str:
         output_dir = Path(own_tempdir.name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    base_cmd = [
+        "openocr",
+        "--task", "doc",
+        "--input_path", str(input_path),
+        "--output_path", str(output_dir),
+        "--use_layout_detection",
+        "--save_markdown",
+    ]
+
+    # Offline-first: only let openocr hit the network if its local model
+    # cache is actually missing something.
     try:
-        subprocess.run(
-            [
-                "openocr",
-                "--task", "doc",
-                "--input_path", str(input_path),
-                "--output_path", str(output_dir),
-                "--use_layout_detection",
-                "--save_markdown",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise ExtractionError(f"openocr failed on {input_path}:\n{e.stderr}") from e
+        subprocess.run(base_cmd + ["--no_auto_download"], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        try:
+            subprocess.run(base_cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise ExtractionError(f"openocr failed on {input_path}:\n{e.stderr}") from e
 
     md_files = sorted(output_dir.rglob("*.md"))
     if not md_files:

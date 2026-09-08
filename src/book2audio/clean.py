@@ -8,6 +8,9 @@ _SOFT_LINEBREAK = re.compile(r"(?<![.!?:\n])\n(?!\n)")
 _MULTI_BLANK = re.compile(r"\n{3,}")
 _PAGE_NUMBER_LINE = re.compile(r"^\s*(\[?\d{1,4}\]?|[ivxlcdm]{1,6}|-\s*\d{1,4}\s*-)\s*$", re.IGNORECASE)
 _FOOTNOTE_MARKER = re.compile(r"\[\^?\d+\]|\(\d+\)$")
+# Superscript footnote refs often flatten to a bare 1-2 digit number glued
+# straight onto the preceding word (e.g. "Antiquity3 aside") with no space.
+_GLUED_FOOTNOTE_REF = re.compile(r"(?<=[a-z])\d{1,2}\b")
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
 _SMART_QUOTES = str.maketrans({
     "‘": "'", "’": "'", "“": '"', "”": '"',
@@ -42,6 +45,7 @@ def clean_text(raw: str) -> str:
     text = "\n".join(lines)
 
     text = _FOOTNOTE_MARKER.sub("", text)
+    text = _GLUED_FOOTNOTE_REF.sub("", text)
     text = _SOFT_LINEBREAK.sub(" ", text)
     text = _MULTI_SPACE.sub(" ", text)
     text = _MULTI_BLANK.sub("\n\n", text)

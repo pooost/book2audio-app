@@ -29,8 +29,26 @@ class Narrator:
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
         self.device = pick_device(device)
-        self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device, t3_model="v3")
+        self.model = self._load_model(ChatterboxMultilingualTTS)
         self.audio_prompt_path = str(audio_prompt_path) if audio_prompt_path else None
+
+    def _load_model(self, model_cls):
+        """Try the local cache first; only touch the network if a file is
+        genuinely missing (offline mode freezes HF_HUB_OFFLINE as a module
+        constant on huggingface_hub import, so env vars alone can't flip it
+        mid-process -- patch the constant directly instead)."""
+        from huggingface_hub import constants as hf_constants
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        try:
+            return model_cls.from_pretrained(device=self.device, t3_model="v3")
+        except LocalEntryNotFoundError:
+            print("Model cache incomplete -- downloading missing files (one-time)...")
+            hf_constants.HF_HUB_OFFLINE = False
+            try:
+                return model_cls.from_pretrained(device=self.device, t3_model="v3")
+            finally:
+                hf_constants.HF_HUB_OFFLINE = True
 
     @property
     def sample_rate(self) -> int:
