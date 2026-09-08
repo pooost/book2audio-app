@@ -13,7 +13,7 @@ dist/Book2Audio/ffmpeg-bin/ afterward -- see .github/workflows/build.yml.
 
 import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 datas = []
 binaries = []
@@ -44,6 +44,39 @@ for pkg in (
     datas += d
     binaries += b
     hiddenimports += h
+
+# transformers/diffusers (pulled in by chatterbox-tts) call
+# importlib.metadata.version(...) at import time to enforce minimum
+# dependency versions -- PyInstaller doesn't bundle a package's dist-info
+# metadata by default (only its code), so those lookups raise
+# PackageNotFoundError and crash the app on startup even though the code
+# itself is present and working. Reproduced live: the packaged macOS build
+# crashed immediately with exactly this error for "requests". copy_metadata
+# bundles just the small dist-info directory each of these needs.
+for dist_name in (
+    "requests",
+    "transformers",
+    "diffusers",
+    "tokenizers",
+    "chatterbox-tts",
+    "huggingface-hub",
+    "safetensors",
+    "regex",
+    "packaging",
+    "filelock",
+    "pyyaml",
+    "numpy",
+    "tqdm",
+    "soundfile",
+    "librosa",
+    "spacy",
+    "openocr-python",
+    "markitdown",
+    "kokoro",
+    "torch",
+    "torchaudio",
+):
+    datas += copy_metadata(dist_name)
 
 a = Analysis(
     ["../run_gui.py"],
